@@ -151,11 +151,11 @@ async function generateBrief({ company, location, product, docs = [] }) {
     const prompt = `You are a helpful assistant. Generate a concise sales brief for the following:
 Instructions:
     - Search for the product and what the product's objectives are. 
-    - Based on the product's objectives, figure out the key personas that would be making purchase decisions
-    - Search for the name, designation and departname of each of the personas in the company
+    - Based on the product's objectives, list out the key personas that would be making purchase decisions such as CTO, VP, Procurement Officers etc.
+    - Search for the designation and departname of each of the personas in the company
     - Search for the company's HQ in India, revenue and figure out the revenue revenue_estimate
     - The email draft should be from the seller to the persona
-    - Search and include the zoominfo link for each persona as a google search string link.
+    - Search and include the zoominfo OR linkedin OR Cognism link for each persona as a search string link. DO NOT INCLUDE the term "google search:"
 Company: ${company}
 Location: ${location || "N/A"}
 Product: ${product}
