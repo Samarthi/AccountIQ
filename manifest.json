@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "NarrativeTailor — Account Research Pack (GenAI)",
+  "version": "0.3",
+  "description": "Generate account briefs + personas + outreach packs using Google GenAI JS lib.",
+  "permissions": ["storage","activeTab","scripting","downloads","tabs"],
+  "host_permissions": ["https://www.google.com/*", "https://generativelanguage.googleapis.com/*", "https://esm.run/*"],
+  "action": { "default_title": "Open my App" },
+  "background": { "service_worker": "background.js" }
+}

@@ -1,0 +1,137 @@
+/* Apply box-sizing globally for predictable layout, ensuring padding is included in the element's total width */
+*, *:before, *:after {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', Arial, sans-serif;
+    /* Use max-width for flexibility, but keep the constraint for a standard popup size */
+    max-width: 600px;
+    width: 100%;
+    /* Increased padding on the body fixes issue 2 (paddingless edges) */
+    padding: 16px; 
+    background-color: #f7f9fc;
+    color: #333;
+}
+
+h2 {
+    color: #1e3a8a;
+    border-bottom: 2px solid #e0e7ff;
+    padding-bottom: 8px;
+    margin-bottom: 15px;
+}
+
+label {
+    display: block;
+    margin-top: 12px;
+    margin-bottom: 4px;
+    font-weight: 600;
+    color: #4b5563;
+    font-size: 0.9rem;
+}
+
+input {
+    width: 100%;
+    padding: 10px 12px;
+    margin: 6px 0;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    transition: border-color 0.2s;
+    font-size: 1rem;
+    background-color: white;
+}
+
+input:focus {
+    border-color: #3b82f6;
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+}
+
+button {
+    padding: 10px 18px;
+    margin: 6px 6px 6px 0;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background-color 0.2s, opacity 0.2s;
+}
+
+/* Primary Generate Button */
+#generate {
+    background-color: #10b981; /* Tailwind green-500 */
+    color: white;
+}
+
+#generate:hover:not(:disabled) {
+    background-color: #059669; /* Tailwind green-600 */
+}
+
+/* Secondary Button (Save Key, View Docs) */
+#saveKey, #viewDocs {
+    background-color: #6366f1; /* Tailwind indigo-500 */
+    color: white;
+}
+
+#saveKey:hover:not(:disabled), #viewDocs:hover:not(:disabled) {
+    background-color: #4f46e5; /* Tailwind indigo-600 */
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#status {
+    margin-top: 15px;
+    padding: 8px;
+    background-color: #fffbeb; /* Tailwind amber-50 */
+    border: 1px solid #fcd34d; /* Tailwind amber-300 */
+    color: #92400e; /* Tailwind amber-800 */
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+#result {
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #e5e7eb;
+}
+
+h3, h4 {
+    color: #1f2937;
+    margin-top: 18px;
+    margin-bottom: 8px;
+    font-weight: 700;
+}
+
+/* Fixes issue 1: email draft spills out */
+pre {
+    background: #eef2ff; /* Light blue background */
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid #c7d2fe;
+    /* Essential: these properties ensure long lines wrap instead of overflowing horizontally */
+    white-space: pre-wrap; 
+    word-wrap: break-word; 
+    overflow-x: hidden; /* Prevent horizontal scrollbar */
+}
+
+#apiKeySection {
+    padding: 10px 0;
+    border-top: 1px dashed #e5e7eb;
+    margin-top: 15px;
+}
+
+#apiKeySection input {
+    margin-bottom: 10px;
+}
+
+.actions {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
