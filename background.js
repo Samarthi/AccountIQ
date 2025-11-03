@@ -1,4 +1,5 @@
 const MODEL_ID = "gemini-2.5-flash";
+const EXPORT_TEMPLATE_KEY = "exportTemplate";
 
 function geminiGenerateUrl(modelId, apiKey, flavor = "generateContent") {
   const base = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:${flavor}`;
@@ -110,6 +111,476 @@ function decodeBase64Text(b64) {
   } catch (e) {
     return "";
   }
+}
+
+function getValueAtPath(obj, path) {
+  if (!path) return undefined;
+  const segments = path.replace(/\[(\d+)\]/g, ".$1").split(".");
+  return segments.reduce((acc, key) => {
+    if (acc === undefined || acc === null) return undefined;
+    return acc[key];
+  }, obj);
+}
+
+function truncateText(str, max = 3000) {
+  if (typeof str !== "string") return "";
+  if (str.length <= max) return str;
+  return str.substring(0, max) + "...";
+}
+
+function prepareDatasetForPrompt(entries = []) {
+  return entries.map((entry) => {
+    const briefHtml = truncateText(entry?.result?.brief_html || "", 2000);
+    return {
+      id: entry.id,
+      createdAt: entry.createdAt,
+      request: entry.request || {},
+      result: {
+        brief_html: briefHtml,
+        personas: Array.isArray(entry?.result?.personas) ? entry.result.personas : [],
+        personaEmails: Array.isArray(entry?.result?.personaEmails) ? entry.result.personaEmails : [],
+        email: entry?.result?.email || {},
+      },
+    };
+  });
+}
+
+function composeExportPrompt(columns, entries, format) {
+  const columnLines = columns
+    .map((col, idx) => `${idx + 1}. ${col.header} - ${col.description}`)
+    .join("\n");
+
+  const dataset = prepareDatasetForPrompt(entries);
+  const datasetJson = JSON.stringify(dataset, null, 2);
+
+  const formatInstruction =
+    format === "md"
+      ? "Provide a Markdown table string in the field `markdownTable`."
+      : "Ensure the JSON rows can be used to build an .xlsx file.";
+
+  return `You are helping prepare research data for export.
+
+Column specifications (respect the header text exactly):
+${columnLines}
+
+The research entries are provided as JSON below. Each entry may include nested details such as personas and generated content. Derive values for each column from the available data. If a value is missing, use an empty string. Do not invent data beyond reasonable inferences from the supplied content.
+
+Research entries JSON:
+${datasetJson}
+
+Respond in strict JSON with this shape:
+{
+  "rows": [
+    {
+      "<Header 1>": "cell value",
+      "<Header 2>": "cell value"
+    }
+  ],
+  "notes": "optional short quality notes or considerations",
+  "markdownTable": "optional markdown table representing all rows"
+}
+
+- The \`rows\` array must contain one object per research entry in the same order they were supplied.
+- Each row object must include every header and only those headers.
+- Use multiline strings where helpful (they will be preserved).
+- ${formatInstruction}
+`;
+}
+
+function ensureRowValues(row, columns) {
+  const normalized = {};
+  columns.forEach((col) => {
+    const header = col.header;
+    const value = row && Object.prototype.hasOwnProperty.call(row, header) ? row[header] : "";
+    if (value === undefined || value === null) {
+      normalized[header] = "";
+    } else if (typeof value === "string") {
+      normalized[header] = value;
+    } else if (typeof value === "number" || typeof value === "boolean") {
+      normalized[header] = String(value);
+    } else {
+      try {
+        normalized[header] = JSON.stringify(value);
+      } catch (err) {
+        normalized[header] = String(value);
+      }
+    }
+  });
+  return normalized;
+}
+
+function filterHistoryEntries(entries, selection = {}) {
+  const { type = "all" } = selection;
+  if (type === "all") {
+    return [...entries];
+  }
+
+  if (type === "custom") {
+    const ids = Array.isArray(selection.selectedIds) ? new Set(selection.selectedIds) : new Set();
+    if (!ids.size) return [];
+    return entries.filter((entry) => ids.has(entry.id));
+  }
+
+  if (type === "date") {
+    const path = selection.dateFieldPath || "createdAt";
+    const fromTime = selection.from ? new Date(selection.from).getTime() : null;
+    const toTime = selection.to ? new Date(selection.to).getTime() : null;
+
+    return entries.filter((entry) => {
+      const value = getValueAtPath(entry, path);
+      if (!value) return false;
+      const ts = new Date(value).getTime();
+      if (Number.isNaN(ts)) return false;
+      if (fromTime !== null && ts < fromTime) return false;
+      if (toTime !== null && ts > toTime) return false;
+      return true;
+    });
+  }
+
+  return [...entries];
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function columnNumberToName(n) {
+  let name = "";
+  let num = n;
+  while (num > 0) {
+    const remainder = (num - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    num = Math.floor((num - 1) / 26);
+  }
+  return name;
+}
+
+function buildWorksheetXml(headers, rows) {
+  const totalRows = rows.length + 1;
+  const lastColumn = columnNumberToName(headers.length);
+  const dimensionRef = `A1:${lastColumn}${Math.max(totalRows, 1)}`;
+
+  const makeCell = (rowIndex, colIndex, value, isHeader = false) => {
+    const ref = `${columnNumberToName(colIndex)}${rowIndex}`;
+    const escaped = escapeXml(value);
+    const style = isHeader ? ` s="1"` : "";
+    return `<c r="${ref}" t="inlineStr"${style}><is><t>${escaped}</t></is></c>`;
+  };
+
+  const rowsXml = [];
+  const headerCells = headers
+    .map((header, idx) => makeCell(1, idx + 1, header, true))
+    .join("");
+  rowsXml.push(`<row r="1">${headerCells}</row>`);
+
+  rows.forEach((row, rowIdx) => {
+    const cells = headers
+      .map((header, colIdx) => makeCell(rowIdx + 2, colIdx + 1, row[header] || "", false))
+      .join("");
+    rowsXml.push(`<row r="${rowIdx + 2}">${cells}</row>`);
+  });
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="${dimensionRef}"/>
+  <sheetViews>
+    <sheetView workbookViewId="0"/>
+  </sheetViews>
+  <sheetFormatPr defaultRowHeight="15"/>
+  <sheetData>
+    ${rowsXml.join("\n    ")}
+  </sheetData>
+</worksheet>`;
+}
+
+function buildStylesXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="2">
+    <font>
+      <sz val="11"/>
+      <color theme="1"/>
+      <name val="Calibri"/>
+      <family val="2"/>
+    </font>
+    <font>
+      <b/>
+      <sz val="11"/>
+      <color theme="1"/>
+      <name val="Calibri"/>
+      <family val="2"/>
+    </font>
+  </fonts>
+  <fills count="1">
+    <fill>
+      <patternFill patternType="none"/>
+    </fill>
+  </fills>
+  <borders count="1">
+    <border>
+      <left/>
+      <right/>
+      <top/>
+      <bottom/>
+      <diagonal/>
+    </border>
+  </borders>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+  </cellXfs>
+  <cellStyles count="1">
+    <cellStyle name="Normal" xfId="0" builtinId="0"/>
+  </cellStyles>
+</styleSheet>`;
+}
+
+function buildContentTypesXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`;
+}
+
+function buildRootRelsXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`;
+}
+
+function buildWorkbookRelsXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+}
+
+function buildWorkbookXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <fileVersion appName="Calc"/>
+  <sheets>
+    <sheet name="Export" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>`;
+}
+
+function buildDocPropsCoreXml(timestamp) {
+  const iso = timestamp.toISOString();
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:creator>AccountIQ Export</dc:creator>
+  <cp:lastModifiedBy>AccountIQ Export</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${iso}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${iso}</dcterms:modified>
+</cp:coreProperties>`;
+}
+
+function buildDocPropsAppXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>AccountIQ Export</Application>
+</Properties>`;
+}
+
+function stringToUint8(str) {
+  return new TextEncoder().encode(str);
+}
+
+function crc32(buf) {
+  const table = crc32.table || (crc32.table = (() => {
+    let c;
+    const table = [];
+    for (let n = 0; n < 256; n++) {
+      c = n;
+      for (let k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      table[n] = c >>> 0;
+    }
+    return table;
+  })());
+
+  let crc = 0 ^ (-1);
+  for (let i = 0; i < buf.length; i++) {
+    crc = (crc >>> 8) ^ table[(crc ^ buf[i]) & 0xff];
+  }
+  return (crc ^ (-1)) >>> 0;
+}
+
+function dateToDosParts(date) {
+  const year = date.getFullYear();
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  const hours = date.getHours();
+  const minutes = date.getMinutes();
+  const seconds = Math.floor(date.getSeconds() / 2);
+
+  const dosDate = ((year - 1980) << 9) | (month << 5) | day;
+  const dosTime = (hours << 11) | (minutes << 5) | seconds;
+  return {
+    dosDate: year < 1980 ? 0 : dosDate,
+    dosTime: year < 1980 ? 0 : dosTime,
+  };
+}
+
+function assembleZip(files) {
+  let totalSize = 0;
+  const fileEntries = [];
+  const centralEntries = [];
+  let offset = 0;
+
+  const encoder = new TextEncoder();
+  const now = new Date();
+  const { dosDate, dosTime } = dateToDosParts(now);
+
+  files.forEach((file) => {
+    const nameBytes = encoder.encode(file.path);
+    let dataBytes = file.data instanceof Uint8Array ? file.data : encoder.encode(file.data);
+    const crc = crc32(dataBytes);
+    const compressedSize = dataBytes.length;
+    const uncompressedSize = dataBytes.length;
+    const localHeaderSize = 30 + nameBytes.length;
+
+    const localHeader = new Uint8Array(localHeaderSize);
+    const lhView = new DataView(localHeader.buffer);
+    lhView.setUint32(0, 0x04034b50, true);
+    lhView.setUint16(4, 20, true);
+    lhView.setUint16(6, 0, true);
+    lhView.setUint16(8, 0, true);
+    lhView.setUint16(10, dosTime, true);
+    lhView.setUint16(12, dosDate, true);
+    lhView.setUint32(14, crc, true);
+    lhView.setUint32(18, compressedSize, true);
+    lhView.setUint32(22, uncompressedSize, true);
+    lhView.setUint16(26, nameBytes.length, true);
+    lhView.setUint16(28, 0, true);
+    localHeader.set(nameBytes, 30);
+
+    fileEntries.push(localHeader);
+    fileEntries.push(dataBytes);
+
+    const centralHeaderSize = 46 + nameBytes.length;
+    const centralHeader = new Uint8Array(centralHeaderSize);
+    const chView = new DataView(centralHeader.buffer);
+    chView.setUint32(0, 0x02014b50, true);
+    chView.setUint16(4, 20, true);
+    chView.setUint16(6, 20, true);
+    chView.setUint16(8, 0, true);
+    chView.setUint16(10, 0, true);
+    chView.setUint16(12, dosTime, true);
+    chView.setUint16(14, dosDate, true);
+    chView.setUint32(16, crc, true);
+    chView.setUint32(20, compressedSize, true);
+    chView.setUint32(24, uncompressedSize, true);
+    chView.setUint16(28, nameBytes.length, true);
+    chView.setUint16(30, 0, true);
+    chView.setUint16(32, 0, true);
+    chView.setUint16(34, 0, true);
+    chView.setUint16(36, 0, true);
+    chView.setUint32(38, 0, true);
+    chView.setUint32(42, offset, true);
+    centralHeader.set(nameBytes, 46);
+    centralEntries.push(centralHeader);
+
+    offset += localHeader.length + dataBytes.length;
+  });
+
+  const centralDirectorySize = centralEntries.reduce((acc, arr) => acc + arr.length, 0);
+  const centralDirectoryOffset = offset;
+
+  const eocd = new Uint8Array(22);
+  const eocdView = new DataView(eocd.buffer);
+  eocdView.setUint32(0, 0x06054b50, true);
+  eocdView.setUint16(4, 0, true);
+  eocdView.setUint16(6, 0, true);
+  eocdView.setUint16(8, files.length, true);
+  eocdView.setUint16(10, files.length, true);
+  eocdView.setUint32(12, centralDirectorySize, true);
+  eocdView.setUint32(16, centralDirectoryOffset, true);
+  eocdView.setUint16(20, 0, true);
+
+  totalSize =
+    fileEntries.reduce((acc, arr) => acc + arr.length, 0) +
+    centralEntries.reduce((acc, arr) => acc + arr.length, 0) +
+    eocd.length;
+
+  const output = new Uint8Array(totalSize);
+  let pointer = 0;
+  fileEntries.forEach((arr) => {
+    output.set(arr, pointer);
+    pointer += arr.length;
+  });
+  centralEntries.forEach((arr) => {
+    output.set(arr, pointer);
+    pointer += arr.length;
+  });
+  output.set(eocd, pointer);
+
+  return output;
+}
+
+function buildXlsxFile(headers, rows) {
+  const timestamp = new Date();
+  const worksheetXml = buildWorksheetXml(headers, rows);
+  const files = [
+    { path: "[Content_Types].xml", data: buildContentTypesXml() },
+    { path: "_rels/.rels", data: buildRootRelsXml() },
+    { path: "xl/workbook.xml", data: buildWorkbookXml() },
+    { path: "xl/_rels/workbook.xml.rels", data: buildWorkbookRelsXml() },
+    { path: "xl/worksheets/sheet1.xml", data: worksheetXml },
+    { path: "xl/styles.xml", data: buildStylesXml() },
+    { path: "docProps/core.xml", data: buildDocPropsCoreXml(timestamp) },
+    { path: "docProps/app.xml", data: buildDocPropsAppXml() },
+  ];
+  return assembleZip(files);
+}
+
+function uint8ToBase64(bytes) {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const slice = bytes.subarray(i, i + chunk);
+    binary += String.fromCharCode.apply(null, slice);
+  }
+  return btoa(binary);
+}
+
+function stringToBase64(str) {
+  return uint8ToBase64(stringToUint8(str));
+}
+
+function generateMarkdownFromRows(headers, rows) {
+  const headerLine = `| ${headers.join(" | ")} |`;
+  const separator = `| ${headers.map(() => "---").join(" | ")} |`;
+  const body = rows
+    .map((row) => {
+      const cells = headers.map((header) => {
+        const value = row[header] || "";
+        return value.replace(/\n/g, "<br>");
+      });
+      return `| ${cells.join(" | ")} |`;
+    })
+    .join("\n");
+  return `${headerLine}\n${separator}${body ? `\n${body}` : ""}`;
 }
 
 async function saveResearchHistoryEntry(request, result) {
@@ -336,6 +807,152 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             await saveResearchHistoryEntry(payload, result);
           }
           sendResponse(result);
+          return;
+        }
+        if (req.action === 'exportResearch') {
+          const selection = req.selection || { type: "all" };
+          const format = req.format === "md" ? "md" : "xlsx";
+
+          let activeTemplate = req.template;
+          if (!activeTemplate || !Array.isArray(activeTemplate.columns) || !activeTemplate.columns.length) {
+            const stored = await chrome.storage.local.get([EXPORT_TEMPLATE_KEY]);
+            const storedTemplate = stored && stored[EXPORT_TEMPLATE_KEY];
+            if (storedTemplate && Array.isArray(storedTemplate.columns) && storedTemplate.columns.length) {
+              activeTemplate = storedTemplate;
+            }
+          }
+
+          if (!activeTemplate || !Array.isArray(activeTemplate.columns) || !activeTemplate.columns.length) {
+            sendResponse({ error: "No export template found. Please add export columns in settings." });
+            return;
+          }
+
+          const columns = activeTemplate.columns
+            .map((col, idx) => {
+              const header = (col && col.header ? String(col.header) : "").trim();
+              const descriptionRaw = col && col.description ? String(col.description) : "";
+              const description = descriptionRaw.trim() || `User defined column ${idx + 1}`;
+              return header ? { header, description } : null;
+            })
+            .filter(Boolean);
+
+          if (!columns.length) {
+            sendResponse({ error: "Export template must include at least one column header." });
+            return;
+          }
+
+          const storedData = await chrome.storage.local.get(["researchHistory"]);
+          const history = Array.isArray(storedData.researchHistory) ? storedData.researchHistory : [];
+
+          if (!history.length) {
+            sendResponse({ error: "No research history available to export." });
+            return;
+          }
+
+          const filteredEntries = filterHistoryEntries(history, selection);
+          if (!filteredEntries.length) {
+            sendResponse({ error: "No research entries match the selected range." });
+            return;
+          }
+
+          const prompt = composeExportPrompt(columns, filteredEntries, format);
+          const llmResult = await callGeminiDirect(prompt, {
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 4096,
+              responseMimeType: "application/json",
+            },
+          });
+
+          if (llmResult.error) {
+            sendResponse({ error: llmResult.error, details: llmResult.details });
+            return;
+          }
+
+          const payloadText = llmResult.text || "";
+          let parsed = extractJsonFromText(payloadText);
+          if (!parsed && payloadText) {
+            try {
+              parsed = JSON.parse(payloadText);
+            } catch (err) {
+              parsed = null;
+            }
+          }
+
+          if (!parsed && llmResult.raw?.candidates?.[0]?.content?.parts?.length) {
+            const combined = llmResult.raw.candidates[0].content.parts
+              .map((part) => part?.text || "")
+              .filter(Boolean)
+              .join("\n");
+            if (combined) {
+              parsed = extractJsonFromText(combined);
+              if (!parsed) {
+                try {
+                  parsed = JSON.parse(combined);
+                } catch (err) {
+                  parsed = null;
+                }
+              }
+            }
+          }
+
+          if (!parsed || !Array.isArray(parsed.rows)) {
+            sendResponse({ error: "Model did not return structured rows for export.", details: payloadText || null });
+            return;
+          }
+
+          const normalizedRows = parsed.rows.map((row) => ensureRowValues(row, columns));
+          const headers = columns.map((col) => col.header);
+
+          let markdownTable = parsed.markdownTable || parsed.markdown || parsed.table;
+          if (format === "md" && !markdownTable) {
+            markdownTable = generateMarkdownFromRows(headers, normalizedRows);
+          }
+
+          let base64Data = "";
+          let mimeType = "";
+          let filename = "";
+
+          if (format === "md") {
+            const exportLines = [];
+            exportLines.push(`# Research Export`);
+            exportLines.push(`Generated: ${new Date().toISOString()}`);
+            exportLines.push("");
+            if (markdownTable) {
+              exportLines.push(markdownTable);
+            } else {
+              exportLines.push(generateMarkdownFromRows(headers, normalizedRows));
+            }
+            if (parsed.notes) {
+              exportLines.push("");
+              exportLines.push(`> ${parsed.notes}`);
+            }
+            const markdownContent = exportLines.join("\n");
+            base64Data = stringToBase64(markdownContent);
+            mimeType = "text/markdown";
+            filename = `research-export-${Date.now()}.md`;
+          } else {
+            const workbookBytes = buildXlsxFile(headers, normalizedRows);
+            base64Data = uint8ToBase64(workbookBytes);
+            mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            filename = `research-export-${Date.now()}.xlsx`;
+          }
+
+          sendResponse({
+            ok: true,
+            totalRows: normalizedRows.length,
+            preview: {
+              headers,
+              rows: normalizedRows.slice(0, 10),
+            },
+            notes: parsed.notes || "",
+            download: {
+              format,
+              mimeType,
+              filename,
+              base64: base64Data,
+            },
+          });
           return;
         }
         if (req.action === 'getResearchHistory') {
