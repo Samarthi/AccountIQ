@@ -12,6 +12,11 @@ const briefDiv = document.getElementById('brief');
 const personasDiv = document.getElementById('personas');
 const emailOut = document.getElementById('emailOut');
 const viewDocs = document.getElementById('viewDocs');
+const historyList = document.getElementById('historyList');
+const historyEmpty = document.getElementById('historyEmpty');
+
+let historyEntries = [];
+let currentHistoryId = null;
 
 saveKeyBtn?.addEventListener('click', async () => {
   const key = apiKeyInput.value.trim();
@@ -126,6 +131,157 @@ function clearAndRenderPersonas(personas) {
     personasDiv.appendChild(wrapper);
   });
 }
+
+function renderResultView(data = {}) {
+  if (!resultDiv || !briefDiv || !emailOut) return;
+
+  resultDiv.style.display = 'block';
+  briefDiv.innerHTML = data.brief_html || data.brief || '';
+
+  const personasData = Array.isArray(data.personas) ? data.personas : [];
+  clearAndRenderPersonas(personasData);
+
+  if (data.email && typeof data.email === 'object' && (data.email.subject || data.email.body)) {
+    const subject = data.email.subject || '';
+    const body = data.email.body || '';
+    const segments = [];
+    if (subject) segments.push(subject);
+    if (body) segments.push(body);
+    emailOut.innerText = segments.join('\n\n');
+  } else if (typeof data.email === 'string') {
+    emailOut.innerText = data.email;
+  } else if (data.email && typeof data.email === 'object') {
+    emailOut.innerText = data.email.body || '';
+  } else {
+    emailOut.innerText = '';
+  }
+
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      resultDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  } else {
+    resultDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+}
+
+function formatHistoryTimestamp(isoString) {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderHistory(entries, opts = {}) {
+  if (!historyList || !historyEmpty) return null;
+
+  const toSortValue = (entry) => {
+    if (!entry) return 0;
+    const ts = entry.createdAt ? new Date(entry.createdAt).getTime() : NaN;
+    if (!Number.isNaN(ts)) return ts;
+    const idNum = Number(entry.id);
+    return Number.isNaN(idNum) ? 0 : idNum;
+  };
+
+  historyEntries = Array.isArray(entries) ? [...entries] : [];
+  historyEntries.sort((a, b) => toSortValue(b) - toSortValue(a));
+
+  if (opts.selectEntryId) {
+    currentHistoryId = opts.selectEntryId;
+  } else if (opts.selectLatest && historyEntries.length) {
+    currentHistoryId = historyEntries[0].id;
+  } else if (currentHistoryId && !historyEntries.some(item => item.id === currentHistoryId)) {
+    currentHistoryId = historyEntries.length ? historyEntries[0].id : null;
+  }
+
+  const hasEntries = historyEntries.length > 0;
+  historyEmpty.style.display = hasEntries ? 'none' : 'block';
+
+  historyList.innerHTML = '';
+  if (!hasEntries) return currentHistoryId;
+
+  historyEntries.forEach((entry) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'history-item';
+    btn.setAttribute('role', 'listitem');
+    btn.dataset.id = entry.id;
+    if (entry.id === currentHistoryId) btn.classList.add('active');
+
+    const title = document.createElement('span');
+    title.className = 'history-title';
+    title.textContent = entry?.request?.company || 'Untitled brief';
+    btn.appendChild(title);
+
+    const subtitleText = [entry?.request?.product, entry?.request?.location].filter(Boolean).join(' • ');
+    if (subtitleText) {
+      const subtitle = document.createElement('span');
+      subtitle.className = 'history-subtitle';
+      subtitle.textContent = subtitleText;
+      btn.appendChild(subtitle);
+    }
+
+    const meta = document.createElement('span');
+    meta.className = 'history-meta';
+    meta.textContent = formatHistoryTimestamp(entry.createdAt) || '';
+    btn.appendChild(meta);
+
+    historyList.appendChild(btn);
+  });
+
+  return currentHistoryId;
+}
+
+function setActiveHistoryItem(id) {
+  currentHistoryId = id;
+  if (!historyList) return;
+  const buttons = historyList.querySelectorAll('.history-item');
+  buttons.forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.id === id);
+  });
+}
+
+function showHistoryEntry(entry, options = {}) {
+  if (!entry) return;
+  const opts = { updateForm: true, statusText: 'Loaded previous brief.', ...options };
+
+  if (opts.updateForm) {
+    if (companyEl) companyEl.value = entry?.request?.company || '';
+    if (locationEl) locationEl.value = entry?.request?.location || '';
+    if (productEl) productEl.value = entry?.request?.product || '';
+  }
+
+  if (entry.result) {
+    renderResultView(entry.result);
+  }
+
+  if (status && typeof opts.statusText === 'string') {
+    status.innerText = opts.statusText;
+  }
+}
+
+function loadHistory(options = {}) {
+  const opts = { autoShow: false, selectLatest: false, updateForm: true, statusText: 'Loaded previous brief.', ...options };
+  chrome.runtime.sendMessage({ action: 'getResearchHistory' }, (resp) => {
+    const err = chrome.runtime.lastError;
+    if (err) {
+      console.warn('Failed to load history', err);
+      return;
+    }
+    const entries = resp && Array.isArray(resp.history) ? resp.history : [];
+    const selectedId = renderHistory(entries, opts);
+
+    if (opts.autoShow && selectedId) {
+      const entry = historyEntries.find(item => item.id === selectedId);
+      if (entry) {
+        showHistoryEntry(entry, { updateForm: opts.updateForm, statusText: opts.statusText });
+        setActiveHistoryItem(selectedId);
+      }
+    } else if (typeof selectedId === 'string') {
+      setActiveHistoryItem(selectedId);
+    }
+  });
+}
 // ---- End helpers ----
 
 generateBtn?.addEventListener('click', async () => {
@@ -135,30 +291,40 @@ generateBtn?.addEventListener('click', async () => {
   if (!company || !product) { status.innerText = 'Company and Product required'; return; }
   status.innerText = 'Generating…';
   resultDiv.style.display = 'none';
+  currentHistoryId = null;
 
-  chrome.runtime.sendMessage({ action: 'getDocsForProduct', product }, async (resp) => {
-    const docs = resp && resp.docs ? resp.docs : [];
+  chrome.runtime.sendMessage({ action: 'getDocsForProduct', product }, (resp) => {
+    const docErr = chrome.runtime.lastError;
+    if (docErr) {
+      status.innerText = 'Failed to load docs: ' + docErr.message;
+      return;
+    }
+    const docs = resp && Array.isArray(resp.docs) ? resp.docs : [];
     chrome.runtime.sendMessage({ action: 'generateBrief', company, location, product, docs }, (result) => {
+      const genErr = chrome.runtime.lastError;
+      if (genErr) { status.innerText = 'Error: ' + genErr.message; return; }
       if (!result) { status.innerText = 'Generation failed'; return; }
       if (result.error) { status.innerText = 'Error: ' + result.error; return; }
+      renderResultView(result);
       status.innerText = 'Done.';
-      resultDiv.style.display = 'block';
-      // brief_html is expected to be safe-ish HTML produced by the background; we set it directly
-      briefDiv.innerHTML = result.brief_html || result.brief || '';
-
-      // personas - use the safe DOM renderer
-      const ps = result.personas || [];
-      clearAndRenderPersonas(ps);
-
-      // email
-      if (result.email && (result.email.subject || result.email.body)) {
-        emailOut.innerText = `${result.email.subject || ''}\n\n${result.email.body || ''}`;
-      } else {
-        emailOut.innerText = result.email || '';
-      }
+      loadHistory({ selectLatest: true, autoShow: false, updateForm: false, statusText: '' });
     });
   });
 });
+
+historyList?.addEventListener('click', (evt) => {
+  const button = evt.target.closest('.history-item');
+  if (!button) return;
+  const { id } = button.dataset;
+  if (!id) return;
+  const entry = historyEntries.find(item => item.id === id);
+  if (!entry) return;
+  evt.preventDefault();
+  setActiveHistoryItem(id);
+  showHistoryEntry(entry, { updateForm: true });
+});
+
+loadHistory({ selectLatest: true, autoShow: true, statusText: '' });
 
 (async () => {
   const data = await chrome.storage.local.get(['geminiKey']);

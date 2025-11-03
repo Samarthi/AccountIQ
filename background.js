@@ -141,6 +141,37 @@ function decodeBase64Text(b64) {
   }
 }
 
+async function saveResearchHistoryEntry(request, result) {
+  try {
+    const entry = {
+      id: Date.now().toString(),
+      createdAt: new Date().toISOString(),
+      request: {
+        company: request.company || "",
+        location: request.location || "",
+        product: request.product || "",
+      },
+      result: {
+        brief_html: result.brief_html || "",
+        personas: Array.isArray(result.personas) ? result.personas : [],
+        email: result.email || {},
+      },
+    };
+
+    const existing = await chrome.storage.local.get(["researchHistory"]);
+    const history = Array.isArray(existing.researchHistory) ? existing.researchHistory : [];
+
+    history.unshift(entry);
+    const trimmed = history.slice(0, 25); // keep most recent 25 items to avoid unbounded growth
+
+    await chrome.storage.local.set({ researchHistory: trimmed });
+    return entry;
+  } catch (err) {
+    console.warn("Failed to persist research history", err);
+    return null;
+  }
+}
+
 async function generateBrief({ company, location, product, docs = [] }) {
   try {
     const docsText = (docs || []).map(d => {
@@ -288,7 +319,16 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         if (req.action === 'generateBrief') {
           const payload = { company: req.company, location: req.location, product: req.product, docs: req.docs || [] };
           const result = await generateBrief(payload);
+          if (!result.error) {
+            await saveResearchHistoryEntry(payload, result);
+          }
           sendResponse(result);
+          return;
+        }
+        if (req.action === 'getResearchHistory') {
+          const data = await chrome.storage.local.get(['researchHistory']);
+          const history = Array.isArray(data.researchHistory) ? data.researchHistory : [];
+          sendResponse({ history });
           return;
         }
       }

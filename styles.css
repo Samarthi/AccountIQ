@@ -6,7 +6,7 @@
 body {
     font-family: 'Inter', Arial, sans-serif;
     /* Use max-width for flexibility, but keep the constraint for a standard popup size */
-    max-width: 600px;
+    max-width: 640px;
     width: 100%;
     /* Increased padding on the body fixes issue 2 (paddingless edges) */
     padding: 16px; 
@@ -134,4 +134,98 @@ pre {
     align-items: center;
     margin-top: 10px;
     margin-bottom: 10px;
+}
+
+#appLayout {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+#mainPane {
+    flex: 1 1 360px;
+    min-width: 0;
+}
+
+#historySidebar {
+    flex: 0 0 220px;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px;
+    box-shadow: 0 5px 15px rgba(15, 23, 42, 0.05);
+    max-height: 520px;
+    display: flex;
+    flex-direction: column;
+}
+
+#historySidebar h3 {
+    margin-top: 0;
+    margin-bottom: 8px;
+}
+
+#historyEmpty {
+    font-size: 0.9rem;
+    color: #6b7280;
+}
+
+#historyList {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    flex: 1 1 auto;
+}
+
+.history-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: #f8fafc;
+    padding: 8px 10px;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.2s, background-color 0.2s;
+}
+
+.history-item:hover {
+    background: #eef2ff;
+    border-color: #c7d2fe;
+}
+
+.history-item.active {
+    border-color: #6366f1;
+    background: #e0e7ff;
+}
+
+.history-title {
+    font-weight: 600;
+    color: #1f2937;
+    font-size: 0.95rem;
+}
+
+.history-subtitle {
+    font-size: 0.85rem;
+    color: #4b5563;
+}
+
+.history-meta {
+    font-size: 0.75rem;
+    color: #6b7280;
+}
+
+@media (max-width: 640px) {
+    #appLayout {
+        flex-direction: column;
+    }
+
+    #historySidebar {
+        width: 100%;
+        max-height: none;
+    }
 }
