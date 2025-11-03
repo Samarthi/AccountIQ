@@ -127,6 +127,12 @@ pre {
     min-height: 200px;
 }
 
+#emailSection {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
 .emailHeader {
     display: flex;
     align-items: center;
@@ -143,6 +149,34 @@ pre {
 
 #copyEmail:hover:not(:disabled) {
     background-color: #1e40af; /* Tailwind blue-800 */
+}
+
+#personaTabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.persona-tab {
+    padding: 6px 12px;
+    border-radius: 16px;
+    border: 1px solid #c7d2fe;
+    background: #e0e7ff;
+    color: #1f2937;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.persona-tab:hover {
+    background: #c7d2fe;
+    border-color: #6366f1;
+}
+
+.persona-tab.active {
+    background: #6366f1;
+    border-color: #4f46e5;
+    color: #fff;
 }
 
 #apiKeySection {
@@ -196,6 +230,24 @@ pre {
     flex-direction: column;
     align-self: stretch;
     min-height: 100%;
+}
+
+#newResearch {
+    width: 100%;
+    margin-bottom: 12px;
+    background-color: #2563eb; /* Tailwind blue-600 */
+    color: #fff;
+    font-size: 0.95rem;
+    border: 1px solid #1d4ed8;
+}
+
+#newResearch:hover:not(:disabled) {
+    background-color: #1d4ed8; /* Tailwind blue-700 */
+}
+
+#newResearch:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
 }
 
 #historySidebar h3 {

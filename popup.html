@@ -12,6 +12,7 @@
       <div id='appLayout'>
         <aside id='historySidebar'>
           <h3>Research History</h3>
+          <button id='newResearch' type='button'>New Research</button>
           <div id='historyEmpty'>No history yet. Run a brief to see it here.</div>
           <div id='historyList' role='list'></div>
         </aside>
@@ -35,11 +36,14 @@
             <div id='result' style='display:none'>
               <h3>Results</h3><div id='brief'></div>
               <h4>Personas</h4><div id='personas'></div>
-              <div class='emailHeader'>
-                <h4>Generated Email</h4>
-                <button id='copyEmail' type='button'>Copy Email</button>
+              <div id='emailSection'>
+                <div class='emailHeader'>
+                  <h4>Generated Emails</h4>
+                  <button id='copyEmail' type='button'>Copy Email</button>
+                </div>
+                <div id='personaTabs' role='tablist' aria-label='Persona email drafts'></div>
+                <pre id='emailOut'></pre>
               </div>
-              <pre id='emailOut'></pre>
             </div>
           </div>
         </div>

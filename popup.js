@@ -3,6 +3,7 @@ const locationEl = document.getElementById('location');
 const productEl = document.getElementById('product');
 const fileInput = document.getElementById('fileInput');
 const saveKeyBtn = document.getElementById('saveKey');
+const newResearchBtn = document.getElementById('newResearch');
 const apiKeyInput = document.getElementById('apiKey');
 const generateBtn = document.getElementById('generate');
 const status = document.getElementById('status');
@@ -11,12 +12,17 @@ const briefDiv = document.getElementById('brief');
 const personasDiv = document.getElementById('personas');
 const emailOut = document.getElementById('emailOut');
 const copyEmailBtn = document.getElementById('copyEmail');
+const personaTabs = document.getElementById('personaTabs');
 const viewDocs = document.getElementById('viewDocs');
 const historyList = document.getElementById('historyList');
 const historyEmpty = document.getElementById('historyEmpty');
 
 let historyEntries = [];
 let currentHistoryId = null;
+let personaEmailDrafts = [];
+let selectedPersonaIndex = -1;
+
+updateCopyEmailButtonState('');
 
 saveKeyBtn?.addEventListener('click', async () => {
   const key = apiKeyInput.value.trim();
@@ -48,6 +54,43 @@ viewDocs?.addEventListener('click', async () => {
   });
 });
 
+newResearchBtn?.addEventListener('click', () => {
+  companyEl && (companyEl.value = '');
+  locationEl && (locationEl.value = '');
+  productEl && (productEl.value = '');
+  if (fileInput) fileInput.value = '';
+
+  currentHistoryId = null;
+  setActiveHistoryItem('');
+
+  if (status) status.innerText = 'Ready for a new research brief.';
+
+  if (resultDiv) resultDiv.style.display = 'none';
+  if (briefDiv) briefDiv.innerHTML = '';
+  if (personasDiv) personasDiv.innerHTML = '';
+
+  personaEmailDrafts = [];
+  selectedPersonaIndex = -1;
+
+  if (personaTabs) {
+    personaTabs.innerHTML = '';
+    personaTabs.style.display = 'none';
+  }
+
+  if (emailOut) emailOut.innerText = 'No email generated yet.';
+  updateCopyEmailButtonState('');
+});
+
+personaTabs?.addEventListener('click', (evt) => {
+  const button = evt.target.closest('.persona-tab');
+  if (!button) return;
+  const { index } = button.dataset;
+  const idx = Number(index);
+  if (!Number.isNaN(idx)) {
+    activatePersonaTab(idx);
+  }
+});
+
 copyEmailBtn?.addEventListener('click', async () => {
   const text = emailOut?.innerText || '';
   if (!text.trim()) {
@@ -57,7 +100,10 @@ copyEmailBtn?.addEventListener('click', async () => {
 
   try {
     await navigator.clipboard.writeText(text);
-    if (status) status.innerText = 'Email copied to clipboard.';
+    if (status) {
+      const personaName = getActivePersonaName();
+      status.innerText = personaName ? `Email for ${personaName} copied to clipboard.` : 'Email copied to clipboard.';
+    }
   } catch (err) {
     const helper = document.createElement('textarea');
     helper.value = text;
@@ -69,7 +115,10 @@ copyEmailBtn?.addEventListener('click', async () => {
     try {
       const ok = document.execCommand('copy');
       if (ok) {
-        if (status) status.innerText = 'Email copied to clipboard.';
+        if (status) {
+          const personaName = getActivePersonaName();
+          status.innerText = personaName ? `Email for ${personaName} copied to clipboard.` : 'Email copied to clipboard.';
+        }
       } else {
         throw new Error('Copy command failed');
       }
@@ -150,6 +199,129 @@ function clearAndRenderPersonas(personas) {
   });
 }
 
+function mergePersonaEmails(personas = [], personaEmails = []) {
+  const maxLen = Math.max(personas.length, personaEmails.length);
+  if (!maxLen) return [];
+
+  const merged = [];
+  for (let i = 0; i < maxLen; i += 1) {
+    const persona = personas[i] || {};
+    const email = personaEmails[i] || {};
+    const personaName = email.personaName || persona.name || `Persona ${i + 1}`;
+    const personaDesignation = email.personaDesignation || persona.designation || '';
+    const personaDepartment = email.personaDepartment || persona.department || '';
+    const subject = email.subject || (persona.email && persona.email.subject) || '';
+    const body = email.body || (persona.email && persona.email.body) || '';
+
+    merged.push({
+      personaName,
+      personaDesignation,
+      personaDepartment,
+      subject,
+      body,
+    });
+  }
+
+  return merged;
+}
+
+function formatEmailDraftText(draft = {}) {
+  const subject = typeof draft.subject === 'string' ? draft.subject.trim() : '';
+  const body = typeof draft.body === 'string' ? draft.body.trim() : '';
+  return [subject, body].filter(Boolean).join('\n\n');
+}
+
+function formatFallbackEmailText(email) {
+  if (!email) return '';
+  if (typeof email === 'string') return email;
+  if (typeof email === 'object') {
+    const subject = typeof email.subject === 'string' ? email.subject.trim() : '';
+    const body = typeof email.body === 'string' ? email.body.trim() : '';
+    return [subject, body].filter(Boolean).join('\n\n');
+  }
+  return '';
+}
+
+function updateCopyEmailButtonState(text = '') {
+  if (!copyEmailBtn) return;
+  const hasText = typeof text === 'string' && text.trim().length > 0;
+  copyEmailBtn.disabled = !hasText;
+}
+
+function getActivePersonaName() {
+  if (selectedPersonaIndex < 0) return '';
+  const draft = personaEmailDrafts[selectedPersonaIndex];
+  return draft && draft.personaName ? draft.personaName : '';
+}
+
+function activatePersonaTab(index) {
+  if (!personaTabs || !personaEmailDrafts.length) return;
+  const safeIndex = Math.max(0, Math.min(index, personaEmailDrafts.length - 1));
+  selectedPersonaIndex = safeIndex;
+
+  const buttons = personaTabs.querySelectorAll('.persona-tab');
+  buttons.forEach((btn, btnIdx) => {
+    const isActive = btnIdx === safeIndex;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    btn.tabIndex = isActive ? 0 : -1;
+  });
+
+  const draft = personaEmailDrafts[safeIndex] || {};
+  const text = formatEmailDraftText(draft);
+  if (text) {
+    emailOut.innerText = text;
+    updateCopyEmailButtonState(text);
+  } else {
+    emailOut.innerText = 'No email available for this persona yet.';
+    updateCopyEmailButtonState('');
+  }
+}
+
+function renderPersonaEmailDrafts(personasData = [], personaEmailsData = [], fallbackEmail) {
+  personaEmailDrafts = mergePersonaEmails(personasData, personaEmailsData);
+
+  if (personaTabs) {
+    personaTabs.innerHTML = '';
+  }
+
+  if (personaEmailDrafts.length && personaTabs) {
+    personaTabs.style.display = '';
+
+    personaEmailDrafts.forEach((draft, idx) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'persona-tab';
+      btn.dataset.index = String(idx);
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-selected', idx === 0 ? 'true' : 'false');
+      btn.tabIndex = idx === 0 ? 0 : -1;
+
+      const labelBits = [];
+      const name = draft.personaName && draft.personaName.trim() ? draft.personaName.trim() : `Persona ${idx + 1}`;
+      labelBits.push(name);
+      if (draft.personaDesignation) labelBits.push(draft.personaDesignation);
+
+      btn.textContent = labelBits.join(' \u2013 ');
+      personaTabs.appendChild(btn);
+    });
+
+    activatePersonaTab(0);
+  } else {
+    if (personaTabs) personaTabs.style.display = 'none';
+    personaEmailDrafts = [];
+    selectedPersonaIndex = -1;
+    const fallbackText = formatFallbackEmailText(fallbackEmail);
+    if (fallbackText) {
+      emailOut.innerText = fallbackText;
+      updateCopyEmailButtonState(fallbackText);
+    } else {
+      emailOut.innerText = 'No email generated yet.';
+      updateCopyEmailButtonState('');
+    }
+  }
+}
+
 function renderResultView(data = {}) {
   if (!resultDiv || !briefDiv || !emailOut) return;
 
@@ -159,20 +331,8 @@ function renderResultView(data = {}) {
   const personasData = Array.isArray(data.personas) ? data.personas : [];
   clearAndRenderPersonas(personasData);
 
-  if (data.email && typeof data.email === 'object' && (data.email.subject || data.email.body)) {
-    const subject = data.email.subject || '';
-    const body = data.email.body || '';
-    const segments = [];
-    if (subject) segments.push(subject);
-    if (body) segments.push(body);
-    emailOut.innerText = segments.join('\n\n');
-  } else if (typeof data.email === 'string') {
-    emailOut.innerText = data.email;
-  } else if (data.email && typeof data.email === 'object') {
-    emailOut.innerText = data.email.body || '';
-  } else {
-    emailOut.innerText = '';
-  }
+  const personaEmailsData = Array.isArray(data.personaEmails) ? data.personaEmails : [];
+  renderPersonaEmailDrafts(personasData, personaEmailsData, data.email);
 
   if (typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(() => {

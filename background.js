@@ -122,12 +122,13 @@ async function saveResearchHistoryEntry(request, result) {
         location: request.location || "",
         product: request.product || "",
       },
-      result: {
-        brief_html: result.brief_html || "",
-        personas: Array.isArray(result.personas) ? result.personas : [],
-        email: result.email || {},
-      },
-    };
+        result: {
+          brief_html: result.brief_html || "",
+          personas: Array.isArray(result.personas) ? result.personas : [],
+          personaEmails: Array.isArray(result.personaEmails) ? result.personaEmails : [],
+          email: result.email || {},
+        },
+      };
 
     const existing = await chrome.storage.local.get(["researchHistory"]);
     const history = Array.isArray(existing.researchHistory) ? existing.researchHistory : [];
@@ -150,37 +151,37 @@ async function generateBrief({ company, location, product, docs = [] }) {
       return `--- ${d.name || "doc"} ---\n${txt.substring(0, 4000)}`;
     }).join("\n\n");
 
-    const prompt = `You are a helpful assistant. Generate a concise sales brief for the following:
-Instructions:
-    - Search for the product and what the product's objectives are. 
-    - Based on the product's objectives, list out the key personas that would be making purchase decisions such as CTO, VP, Procurement Officers etc.
-    - Search for the designation and departname of each of the personas in the company
-    - Search for the company's HQ in India, revenue and figure out the revenue revenue_estimate
-    - The email draft should be from the seller to the persona
-    - Search and include the zoominfo OR linkedin OR Cognism link for each persona as a search string link. DO NOT INCLUDE the term "google search:"
-Company: ${company}
-Location: ${location || "N/A"}
-Product: ${product}
+      const prompt = `You are a helpful assistant. Generate a concise sales brief for the following:
+  Instructions:
+      - Search for the product and what the product's objectives are.
+      - Based on the product's objectives, list out the key personas that would be making purchase decisions such as CTO, VP, Procurement Officers etc.
+      - Search for the designation and department of each of the personas in the company.
+      - Search for the company's HQ in India, revenue and figure out the revenue revenue_estimate.
+      - For each persona, craft a separate outreach email from the seller to that persona highlighting product value for their responsibilities.
+      - Each persona email must include a clear subject line and a concise, professional body tailored to that persona.
+      - Search and include the ZoomInfo OR LinkedIn OR Cognism link for each persona as a search string link. DO NOT INCLUDE the term "google search:"
+  Company: ${company}
+  Location: ${location || "N/A"}
+  Product: ${product}
 
-Context docs (first 4000 chars each):
-${docsText || "(no docs provided)"}
+  Context docs (first 4000 chars each):
+  ${docsText || "(no docs provided)"}
 
-Output JSON in this structure EXACTLY. Do not include \`\`\`json markdown wrappers.
-{
-  "company_name": "",
-  "revenue_estimate": "",
-  "hq_location": "",
-  "top_5_news": [
-    {"title": "", "summary": ""}
-  ],
-  "key_personas": [
-    {"name": "", "designation": "", "department": "", "zoominfo_link": ""}
-  ],
-  "personalized_email": {"subject": "", "body": ""}
-}
+  Output JSON in this structure EXACTLY. Do not include \`\`\`json markdown wrappers.
+  {
+    "company_name": "",
+    "revenue_estimate": "",
+    "hq_location": "",
+    "top_5_news": [
+      {"title": "", "summary": ""}
+    ],
+    "key_personas": [
+      {"name": "", "designation": "", "department": "", "zoominfo_link": "", "email": {"subject": "", "body": ""}}
+    ]
+  }
 
-Be concise. If no data available, return empty strings or empty arrays as appropriate.
-`;
+  Be concise. If no data available, return empty strings or empty arrays as appropriate.
+  `;
 
     const resp = await callGeminiDirect(prompt, {
       generationConfig: {
@@ -225,23 +226,72 @@ Be concise. If no data available, return empty strings or empty arrays as approp
     }
       
 
-    const personas = (parsed.key_personas || []).map(p => ({
+    const rawPersonas = Array.isArray(parsed.key_personas) ? parsed.key_personas : [];
+
+    const personas = rawPersonas.map(p => ({
       name: p.name || "",
       designation: p.designation || "",
       department: p.department || "",
       zoominfo_link: (p.zoominfo_link || p.zoomInfo || p.zoominfo || p.zoom) || buildZoomInfoSearchLink(p, parsed.company_name || company)
     }));
 
+    const personaEmails = rawPersonas.map((p, idx) => {
+      const personaName = p.name || `Persona ${idx + 1}`;
+      const emailData = p.email || p.persona_email || {};
+      const subject = (emailData && typeof emailData === "object" ? emailData.subject : undefined) || p.email_subject || "";
+      const body = (emailData && typeof emailData === "object" ? emailData.body : undefined) || p.email_body || "";
+      return {
+        personaName,
+        personaDesignation: p.designation || "",
+        personaDepartment: p.department || "",
+        subject: subject || "",
+        body: body || ""
+      };
+    });
 
-    let emailObj = { subject: "", body: "" };
-    if (typeof parsed.personalized_email === "string") {
-      emailObj.body = parsed.personalized_email;
-    } else if (parsed.personalized_email && typeof parsed.personalized_email === "object") {
-      emailObj.subject = parsed.personalized_email.subject || "";
-      emailObj.body = parsed.personalized_email.body || "";
+    const personaEmailsArray = Array.isArray(parsed.persona_emails) ? parsed.persona_emails : Array.isArray(parsed.personaEmails) ? parsed.personaEmails : [];
+    if (personaEmailsArray.length) {
+      personaEmails.forEach((entry, idx) => {
+        const fallbackEmail = personaEmailsArray[idx] || personaEmailsArray.find(pe => {
+          const candidateName = (pe.persona_name || pe.name || "").toLowerCase();
+          return candidateName && candidateName === (entry.personaName || "").toLowerCase();
+        });
+        if (fallbackEmail) {
+          const sub = fallbackEmail.subject || fallbackEmail.email_subject || "";
+          const bod = fallbackEmail.body || fallbackEmail.email_body || "";
+          if (!entry.subject) entry.subject = sub || "";
+          if (!entry.body) entry.body = bod || "";
+        }
+      });
+      if (!personaEmails.length) {
+        personaEmailsArray.forEach((pe, idx) => {
+          personaEmails.push({
+            personaName: pe.persona_name || pe.name || `Persona ${idx + 1}`,
+            personaDesignation: pe.persona_designation || pe.designation || "",
+            personaDepartment: pe.persona_department || pe.department || "",
+            subject: pe.subject || pe.email_subject || "",
+            body: pe.body || pe.email_body || ""
+          });
+        });
+      }
     }
 
-    return { brief_html, personas, email: emailObj, raw: outText };
+    let emailObj = { subject: "", body: "" };
+    if (personaEmails.length) {
+      emailObj.subject = personaEmails[0]?.subject || "";
+      emailObj.body = personaEmails[0]?.body || "";
+    }
+
+    if (!emailObj.subject && !emailObj.body) {
+      if (typeof parsed.personalized_email === "string") {
+        emailObj.body = parsed.personalized_email;
+      } else if (parsed.personalized_email && typeof parsed.personalized_email === "object") {
+        emailObj.subject = parsed.personalized_email.subject || "";
+        emailObj.body = parsed.personalized_email.body || "";
+      }
+    }
+
+    return { brief_html, personas, personaEmails, email: emailObj, raw: outText };
   } catch (err) {
     return { error: String(err) };
   }
