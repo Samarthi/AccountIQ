@@ -1450,8 +1450,4 @@ historyList?.addEventListener('click', (evt) => {
 
 loadHistory({ selectLatest: true, autoShow: true, statusText: '' });
 
-(async () => {
-  const data = await chrome.storage.local.get(['geminiKey']);
-  if (data && data.geminiKey) apiKeyInput.value = data.geminiKey;
-  await loadExportTemplateFromStorage();
-})();
+
