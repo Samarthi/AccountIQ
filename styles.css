@@ -5,8 +5,8 @@
 
 body {
     font-family: 'Inter', Arial, sans-serif;
-    /* Use max-width for flexibility, but keep the constraint for a standard popup size */
-    max-width: 640px;
+    /* Allow more room so research grid can grow */
+    max-width: 960px;
     width: 100%;
     /* Increased padding on the body fixes issue 2 (paddingless edges) */
     padding: 16px; 
@@ -97,6 +97,8 @@ button:disabled {
     margin-top: 20px;
     padding-top: 15px;
     border-top: 1px solid #e5e7eb;
+    font-size: 1.05rem;
+    width: 100%;
 }
 
 h3, h4 {
@@ -116,6 +118,31 @@ pre {
     white-space: pre-wrap; 
     word-wrap: break-word; 
     overflow-x: hidden; /* Prevent horizontal scrollbar */
+    font-size: 1rem;
+    line-height: 1.6;
+}
+
+#emailOut {
+    width: 100%;
+    min-height: 200px;
+}
+
+.emailHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+#copyEmail {
+    background-color: #1d4ed8; /* Tailwind blue-700 */
+    color: #fff;
+    padding: 8px 14px;
+    font-size: 0.9rem;
+}
+
+#copyEmail:hover:not(:disabled) {
+    background-color: #1e40af; /* Tailwind blue-800 */
 }
 
 #apiKeySection {
@@ -139,12 +166,23 @@ pre {
 #appLayout {
     display: flex;
     gap: 16px;
-    align-items: flex-start;
+    align-items: stretch;
 }
 
 #mainPane {
-    flex: 1 1 360px;
-    min-width: 0;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+    justify-content: flex-start;
+}
+
+#formPane {
+    flex: 0 0 360px;
+    max-width: 360px;
+    width: 100%;
+    align-self: flex-start;
 }
 
 #historySidebar {
@@ -154,9 +192,10 @@ pre {
     border-radius: 8px;
     padding: 12px;
     box-shadow: 0 5px 15px rgba(15, 23, 42, 0.05);
-    max-height: 520px;
     display: flex;
     flex-direction: column;
+    align-self: stretch;
+    min-height: 100%;
 }
 
 #historySidebar h3 {
@@ -224,8 +263,31 @@ pre {
         flex-direction: column;
     }
 
+    #mainPane {
+        flex-direction: column;
+    }
+
+    #formPane {
+        max-width: none;
+        align-self: stretch;
+        flex: 0 0 auto;
+    }
+
     #historySidebar {
         width: 100%;
         max-height: none;
     }
+}
+
+#brief,
+#personas,
+#personas .persona {
+    font-size: 1rem;
+    line-height: 1.6;
+}
+#resultWrapper {
+    width: 100%;
+    flex: 1 1 0;
+    align-self: stretch;
+    min-width: 0;
 }
