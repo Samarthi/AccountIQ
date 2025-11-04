@@ -23,9 +23,17 @@ const modalTitle = document.getElementById('modalTitle');
 const modalBody = document.getElementById('modalBody');
 const modalFooter = document.getElementById('modalFooter');
 const modalClose = document.getElementById('modalClose');
+const modeTabs = document.querySelectorAll('[data-mode-tab]');
+const modeViews = document.querySelectorAll('[data-mode-view]');
+const historySections = document.querySelectorAll('[data-history-section]');
 
 const EXPORT_TEMPLATE_STORAGE_KEY = 'exportTemplate';
 const EXPORT_PAGE_SIZE = 8;
+
+const Mode = {
+  TARGETED_BRIEF: 'targetedBrief',
+  TARGET_GENERATION: 'targetGeneration',
+};
 
 let historyEntries = [];
 let currentHistoryId = null;
@@ -36,8 +44,62 @@ let availableDateFields = [];
 let defaultDateFieldPath = 'createdAt';
 let activeModalCleanup = null;
 let activeExportState = null;
+let activeMode = null;
+
+function setActiveMode(mode) {
+  const validModes = Object.values(Mode);
+  if (!validModes.includes(mode)) {
+    mode = Mode.TARGETED_BRIEF;
+  }
+  if (activeMode === mode) {
+    return;
+  }
+  activeMode = mode;
+
+  Array.from(modeTabs).forEach((tab) => {
+    const isActive = tab.dataset.modeTab === mode;
+    tab.classList.toggle('active', isActive);
+    tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    tab.removeAttribute('tabindex');
+  });
+
+  Array.from(modeViews).forEach((view) => {
+    const isActive = view.dataset.modeView === mode;
+    if (isActive) {
+      view.removeAttribute('hidden');
+      view.setAttribute('aria-hidden', 'false');
+    } else {
+      view.setAttribute('hidden', 'hidden');
+      view.setAttribute('aria-hidden', 'true');
+    }
+  });
+
+  Array.from(historySections).forEach((section) => {
+    const isActive = section.dataset.historySection === mode;
+    if (isActive) {
+      section.removeAttribute('hidden');
+      section.setAttribute('aria-hidden', 'false');
+    } else {
+      section.setAttribute('hidden', 'hidden');
+      section.setAttribute('aria-hidden', 'true');
+    }
+  });
+}
 
 updateCopyEmailButtonState('');
+
+const modeTabList = Array.from(modeTabs);
+if (modeTabList.length) {
+  modeTabList.forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const targetMode = tab.dataset.modeTab || Mode.TARGETED_BRIEF;
+      setActiveMode(targetMode);
+    });
+  });
+  const initialTab = modeTabList.find((tab) => tab.classList.contains('active') || tab.getAttribute('aria-selected') === 'true');
+  const initialMode = initialTab?.dataset.modeTab || Mode.TARGETED_BRIEF;
+  setActiveMode(initialMode);
+}
 
 saveKeyBtn?.addEventListener('click', async () => {
   const key = apiKeyInput.value.trim();

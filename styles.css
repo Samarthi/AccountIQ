@@ -108,6 +108,37 @@ button.primary:hover:not(:disabled) {
     padding-bottom: 0;
 }
 
+#modeSwitcher {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.mode-tab {
+    flex: 0 0 auto;
+    border-radius: 999px;
+    border: 1px solid #c7d2fe;
+    background-color: #eef2ff;
+    color: #1f2937;
+    padding: 8px 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s, box-shadow 0.2s;
+}
+
+.mode-tab[aria-selected='true'],
+.mode-tab.active {
+    background-color: #4338ca;
+    border-color: #3730a3;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(67, 56, 202, 0.2);
+}
+
+.mode-tab:focus-visible {
+    outline: 2px solid #1d4ed8;
+    outline-offset: 2px;
+}
+
 #settingsTrigger {
     position: fixed;
     bottom: 16px;
@@ -539,6 +570,40 @@ pre {
     align-items: stretch;
 }
 
+.mode-view[hidden] {
+    display: none !important;
+}
+
+.mode-view[data-mode-view='targetedBrief'] {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+}
+
+.mode-view[data-mode-view='targetGeneration'] {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 24px;
+    text-align: center;
+    border: 1px dashed #d1d5db;
+    border-radius: 8px;
+    background-color: #f9fafb;
+    color: #6b7280;
+}
+
+.mode-view[data-mode-view='targetGeneration'] h3 {
+    margin: 0;
+    color: #111827;
+}
+
+.empty-state p {
+    margin: 0;
+}
+
 #mainPane {
     flex: 1 1 auto;
     display: flex;
@@ -566,6 +631,22 @@ pre {
     flex-direction: column;
     align-self: stretch;
     min-height: 100%;
+}
+
+.history-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    height: 100%;
+}
+
+.history-section[hidden] {
+    display: none !important;
+}
+
+.history-empty-placeholder {
+    font-size: 0.9rem;
+    color: #6b7280;
 }
 
 #newResearch {

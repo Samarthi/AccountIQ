@@ -12,41 +12,63 @@
         <button id='exportTrigger' type='button' class='primary'>Export</button>
         <h2>NarrativeTailor (GenAI)</h2>
       </div>
+      <div id='modeSwitcher' role='tablist' aria-label='Generation mode'>
+        <button type='button' class='mode-tab active' role='tab' aria-selected='true' data-mode-tab='targetedBrief'>
+          Targeted Brief Generation
+        </button>
+        <button type='button' class='mode-tab' role='tab' aria-selected='false' data-mode-tab='targetGeneration'>
+          Target Generation
+        </button>
+      </div>
       <div id='appLayout'>
         <aside id='historySidebar'>
-          <h3>Research History</h3>
-          <button id='newResearch' type='button'>New Research</button>
-          <div id='historyEmpty'>No history yet. Run a brief to see it here.</div>
-          <div id='historyList' role='list'></div>
+          <div class='history-section' data-history-section='targetedBrief'>
+            <h3>Research History</h3>
+            <button id='newResearch' type='button'>New Research</button>
+            <div id='historyEmpty'>No history yet. Run a brief to see it here.</div>
+            <div id='historyList' role='list'></div>
+          </div>
+          <div class='history-section' data-history-section='targetGeneration' hidden>
+            <h3>Target History</h3>
+            <div class='history-empty-placeholder'>No targets yet. Generate one to see it here.</div>
+          </div>
         </aside>
         <div id='mainPane'>
-          <div id='formPane'>
-            <label>Company</label><input id='company' placeholder='e.g., Infosys'/>
-            <label>Location</label><input id='location' placeholder='e.g., India'/>
-            <label>Product</label><input id='product' placeholder='e.g., Cloud Security'/>
-            <label>Upload Docs (PDF/TXT)</label><input id='fileInput' type='file' multiple/>
-            <div id='apiKeySection'>
-              <label>Gemini API Key</label><input id='apiKey' placeholder='Paste Gemini API key'/>
-              <button id='saveKey'>Save Key</button>
-            </div>
-            <div class='actions'>
-              <button id='generate'>Generate Brief</button>
-              <button id='viewDocs'>View Docs</button>
-            </div>
-            <div id='status'></div>
-          </div>
-          <div id='resultWrapper'>
-            <div id='result' style='display:none'>
-              <h3>Results</h3><div id='brief'></div>
-              <h4>Personas</h4><div id='personas'></div>
-              <div id='emailSection'>
-                <div class='emailHeader'>
-                  <h4>Generated Emails</h4>
-                  <button id='copyEmail' type='button'>Copy Email</button>
-                </div>
-                <div id='personaTabs' role='tablist' aria-label='Persona email drafts'></div>
-                <pre id='emailOut'></pre>
+          <div class='mode-view' data-mode-view='targetedBrief'>
+            <div id='formPane'>
+              <label>Company</label><input id='company' placeholder='e.g., Infosys'/>
+              <label>Location</label><input id='location' placeholder='e.g., India'/>
+              <label>Product</label><input id='product' placeholder='e.g., Cloud Security'/>
+              <label>Upload Docs (PDF/TXT)</label><input id='fileInput' type='file' multiple/>
+              <div id='apiKeySection'>
+                <label>Gemini API Key</label><input id='apiKey' placeholder='Paste Gemini API key'/>
+                <button id='saveKey'>Save Key</button>
               </div>
+              <div class='actions'>
+                <button id='generate'>Generate Brief</button>
+                <button id='viewDocs'>View Docs</button>
+              </div>
+              <div id='status'></div>
+            </div>
+            <div id='resultWrapper'>
+              <div id='result' style='display:none'>
+                <h3>Results</h3><div id='brief'></div>
+                <h4>Personas</h4><div id='personas'></div>
+                <div id='emailSection'>
+                  <div class='emailHeader'>
+                    <h4>Generated Emails</h4>
+                    <button id='copyEmail' type='button'>Copy Email</button>
+                  </div>
+                  <div id='personaTabs' role='tablist' aria-label='Persona email drafts'></div>
+                  <pre id='emailOut'></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class='mode-view' data-mode-view='targetGeneration' hidden>
+            <div class='empty-state'>
+              <h3>Target Generation</h3>
+              <p>Select this tab when you're ready to build target lists.</p>
             </div>
           </div>
         </div>
