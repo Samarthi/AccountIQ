@@ -4,6 +4,7 @@ const productEl = document.getElementById('product');
 const fileInput = document.getElementById('fileInput');
 const saveKeyBtn = document.getElementById('saveKey');
 const newResearchBtn = document.getElementById('newResearch');
+const newTargetResearchBtn = document.getElementById('newTargetResearch');
 const apiKeyInput = document.getElementById('apiKey');
 const generateBtn = document.getElementById('generate');
 const status = document.getElementById('status');
@@ -16,6 +17,8 @@ const personaTabs = document.getElementById('personaTabs');
 const viewDocs = document.getElementById('viewDocs');
 const historyList = document.getElementById('historyList');
 const historyEmpty = document.getElementById('historyEmpty');
+const targetHistoryList = document.getElementById('targetHistoryList');
+const targetHistoryEmpty = document.getElementById('targetHistoryEmpty');
 const exportTrigger = document.getElementById('exportTrigger');
 const settingsTrigger = document.getElementById('settingsTrigger');
 const modalRoot = document.getElementById('modalRoot');
@@ -26,6 +29,14 @@ const modalClose = document.getElementById('modalClose');
 const modeTabs = document.querySelectorAll('[data-mode-tab]');
 const modeViews = document.querySelectorAll('[data-mode-view]');
 const historySections = document.querySelectorAll('[data-history-section]');
+const targetForm = document.getElementById('targetForm');
+const targetProductInput = document.getElementById('targetProduct');
+const targetDocInput = document.getElementById('targetDocInput');
+const targetLocationInput = document.getElementById('targetLocation');
+const targetStatusEl = document.getElementById('targetStatus');
+const targetResultsSection = document.getElementById('targetResults');
+const targetResultsList = document.getElementById('targetResultsList');
+const copyTargetsBtn = document.getElementById('copyTargets');
 
 const EXPORT_TEMPLATE_STORAGE_KEY = 'exportTemplate';
 const EXPORT_PAGE_SIZE = 8;
@@ -37,6 +48,8 @@ const Mode = {
 
 let historyEntries = [];
 let currentHistoryId = null;
+let targetHistoryEntries = [];
+let currentTargetHistoryId = null;
 let personaEmailDrafts = [];
 let selectedPersonaIndex = -1;
 let exportTemplate = { columns: [] };
@@ -45,6 +58,7 @@ let defaultDateFieldPath = 'createdAt';
 let activeModalCleanup = null;
 let activeExportState = null;
 let activeMode = null;
+let latestTargetResultsText = '';
 
 function setActiveMode(mode) {
   const validModes = Object.values(Mode);
@@ -85,6 +99,179 @@ function setActiveMode(mode) {
     }
   });
 }
+
+function setTargetStatus(message, options = {}) {
+  if (!targetStatusEl) return;
+  targetStatusEl.textContent = message || '';
+  targetStatusEl.classList.toggle('error', !!options.error);
+}
+
+function resetTargetResults() {
+  if (targetResultsList) {
+    targetResultsList.innerHTML = '';
+  }
+  if (targetResultsSection) {
+    targetResultsSection.setAttribute('hidden', 'hidden');
+  }
+  latestTargetResultsText = '';
+  if (copyTargetsBtn) {
+    copyTargetsBtn.disabled = true;
+  }
+}
+
+function buildTargetsCopyText(companies = []) {
+  return companies
+    .map((company, idx) => {
+      const parts = [];
+      const name = company?.name ? String(company.name).trim() : '';
+      const website = company?.website ? String(company.website).trim() : '';
+      const revenue = company?.revenue ? String(company.revenue).trim() : '';
+      if (name) {
+        parts.push(`${idx + 1}. ${name}`);
+      } else {
+        parts.push(`${idx + 1}.`);
+      }
+      if (website) {
+        parts.push(`Website: ${website}`);
+      }
+      if (revenue) {
+        parts.push(`Revenue: ${revenue}`);
+      }
+      if (company?.notes) {
+        parts.push(`Notes: ${String(company.notes).trim()}`);
+      }
+      return parts.join(' | ');
+    })
+    .join('\n');
+}
+
+function renderTargetResults(companies = []) {
+  if (!targetResultsSection || !targetResultsList) {
+    latestTargetResultsText = '';
+    return;
+  }
+
+  targetResultsList.innerHTML = '';
+
+  if (!companies.length) {
+    const empty = document.createElement('li');
+    empty.className = 'target-results-empty';
+    empty.textContent = 'No companies returned by Gemini.';
+    targetResultsList.appendChild(empty);
+    targetResultsSection.removeAttribute('hidden');
+    latestTargetResultsText = '';
+    if (copyTargetsBtn) {
+      copyTargetsBtn.disabled = true;
+    }
+    return;
+  }
+
+  companies.forEach((company) => {
+    const item = document.createElement('li');
+    item.className = 'target-results-item';
+
+    const title = document.createElement('p');
+    title.className = 'target-company-name';
+    title.textContent = company?.name || 'Unnamed Company';
+    item.appendChild(title);
+
+    const meta = document.createElement('div');
+    meta.className = 'target-company-meta';
+    if (company?.website) {
+      try {
+        const trimmed = String(company.website).trim();
+        const normalized = trimmed && /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+        const url = new URL(normalized);
+        const link = document.createElement('a');
+        link.href = url.href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = url.hostname || url.href;
+        meta.appendChild(link);
+      } catch (err) {
+        const fallback = document.createElement('span');
+        fallback.textContent = company.website;
+        meta.appendChild(fallback);
+      }
+    }
+    if (company?.revenue) {
+      const revenueEl = document.createElement('span');
+      revenueEl.textContent = `Revenue: ${company.revenue}`;
+      meta.appendChild(revenueEl);
+    }
+    if (meta.children.length) {
+      item.appendChild(meta);
+    }
+
+    if (company?.notes) {
+      const notes = document.createElement('p');
+      notes.className = 'target-company-notes';
+      notes.textContent = company.notes;
+      item.appendChild(notes);
+    }
+
+    targetResultsList.appendChild(item);
+  });
+
+  targetResultsSection.removeAttribute('hidden');
+  latestTargetResultsText = buildTargetsCopyText(companies);
+
+  if (copyTargetsBtn) {
+    copyTargetsBtn.disabled = !latestTargetResultsText;
+  }
+}
+
+function arrayBufferToBase64(buffer) {
+  if (!buffer) return '';
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const sub = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, sub);
+  }
+  try {
+    return btoa(binary);
+  } catch (err) {
+    return '';
+  }
+}
+
+async function readFileContentForTargets(file) {
+  if (!file) {
+    return { name: '', text: '', base64: '' };
+  }
+
+  const name = file.name || 'uploaded-document';
+
+  const text = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => resolve('');
+    try {
+      reader.readAsText(file);
+    } catch (err) {
+      resolve('');
+    }
+  });
+
+  const arrayBuffer = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => resolve(null);
+    try {
+      reader.readAsArrayBuffer(file);
+    } catch (err) {
+      resolve(null);
+    }
+  });
+
+  const base64 = arrayBufferToBase64(arrayBuffer);
+  const trimmedText = typeof text === 'string' ? text.slice(0, 8000) : '';
+
+  return { name, text: trimmedText, base64 };
+}
+resetTargetResults();
 
 updateCopyEmailButtonState('');
 
@@ -131,6 +318,107 @@ viewDocs?.addEventListener('click', async () => {
   });
 });
 
+targetForm?.addEventListener('submit', async (evt) => {
+  evt.preventDefault();
+  const product = targetProductInput?.value.trim() || '';
+  const location = targetLocationInput?.value.trim() || '';
+
+  if (!product) {
+    setTargetStatus('Product name is required to generate targets.', { error: true });
+    return;
+  }
+
+  setTargetStatus('Generating targets...', { error: false });
+  resetTargetResults();
+
+  const submitBtn = targetForm.querySelector('#generateTargets');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+  }
+
+  let docPayload = { name: '', text: '', base64: '' };
+  const file = targetDocInput?.files?.[0] || null;
+  if (file) {
+    docPayload = await readFileContentForTargets(file);
+  }
+
+  chrome.runtime.sendMessage(
+    {
+      action: 'generateTargets',
+      product,
+      location,
+      docName: docPayload.name,
+      docText: docPayload.text,
+      docBase64: docPayload.base64,
+    },
+    (resp) => {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+      }
+
+      const runtimeErr = chrome.runtime.lastError;
+      if (runtimeErr) {
+        setTargetStatus(`Failed to generate targets: ${runtimeErr.message || runtimeErr}`, { error: true });
+        return;
+      }
+
+      if (!resp) {
+        setTargetStatus('No response received from background script.', { error: true });
+        return;
+      }
+
+      if (resp.error) {
+        setTargetStatus(`Error: ${resp.error}`, { error: true });
+        return;
+      }
+
+      const companies = Array.isArray(resp.companies) ? resp.companies : [];
+      renderTargetResults(companies);
+      if (resp && resp.ok) {
+        loadTargetHistory({ selectLatest: true, autoShow: false, updateForm: false, statusText: '' });
+      }
+
+      if (companies.length) {
+        setTargetStatus(`Found ${companies.length} potential companies.`, { error: false });
+      } else {
+        setTargetStatus('No companies returned. Try refining the inputs.', { error: true });
+      }
+    }
+  );
+});
+
+copyTargetsBtn?.addEventListener('click', async () => {
+  if (!latestTargetResultsText) {
+    setTargetStatus('No results to copy yet.', { error: true });
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(latestTargetResultsText);
+    setTargetStatus('Target list copied to clipboard.', { error: false });
+  } catch (err) {
+    const helper = document.createElement('textarea');
+    helper.value = latestTargetResultsText;
+    helper.setAttribute('readonly', '');
+    helper.style.position = 'absolute';
+    helper.style.left = '-9999px';
+    document.body.appendChild(helper);
+    helper.select();
+    try {
+      const ok = document.execCommand('copy');
+      document.body.removeChild(helper);
+      if (ok) {
+        setTargetStatus('Target list copied to clipboard.', { error: false });
+      } else {
+        throw new Error('Copy command failed');
+      }
+    } catch (copyErr) {
+      document.body.removeChild(helper);
+      setTargetStatus('Unable to copy results automatically.', { error: true });
+    }
+  }
+});
+
 newResearchBtn?.addEventListener('click', () => {
   companyEl && (companyEl.value = '');
   locationEl && (locationEl.value = '');
@@ -156,6 +444,18 @@ newResearchBtn?.addEventListener('click', () => {
 
   if (emailOut) emailOut.innerText = 'No email generated yet.';
   updateCopyEmailButtonState('');
+});
+
+newTargetResearchBtn?.addEventListener('click', () => {
+  if (targetProductInput) targetProductInput.value = '';
+  if (targetLocationInput) targetLocationInput.value = '';
+  if (targetDocInput) targetDocInput.value = '';
+
+  currentTargetHistoryId = null;
+  setActiveTargetHistoryItem('');
+
+  resetTargetResults();
+  setTargetStatus('Ready for a new target search.', { error: false });
 });
 
 personaTabs?.addEventListener('click', (evt) => {
@@ -1462,6 +1762,120 @@ function loadHistory(options = {}) {
     }
   });
 }
+
+function renderTargetHistory(entries, opts = {}) {
+  if (!targetHistoryList || !targetHistoryEmpty) return null;
+
+  const toSortValue = (entry) => {
+    if (!entry) return 0;
+    const ts = entry.createdAt ? new Date(entry.createdAt).getTime() : NaN;
+    if (!Number.isNaN(ts)) return ts;
+    const idNum = Number(entry.id);
+    return Number.isNaN(idNum) ? 0 : idNum;
+  };
+
+  targetHistoryEntries = Array.isArray(entries) ? [...entries] : [];
+  targetHistoryEntries.sort((a, b) => toSortValue(b) - toSortValue(a));
+
+  if (opts.selectEntryId) {
+    currentTargetHistoryId = opts.selectEntryId;
+  } else if (opts.selectLatest && targetHistoryEntries.length) {
+    currentTargetHistoryId = targetHistoryEntries[0].id;
+  } else if (currentTargetHistoryId && !targetHistoryEntries.some(item => item.id === currentTargetHistoryId)) {
+    currentTargetHistoryId = targetHistoryEntries.length ? targetHistoryEntries[0].id : null;
+  }
+
+  const hasEntries = targetHistoryEntries.length > 0;
+  targetHistoryEmpty.style.display = hasEntries ? 'none' : 'block';
+
+  targetHistoryList.innerHTML = '';
+  if (!hasEntries) return currentTargetHistoryId;
+
+  targetHistoryEntries.forEach((entry) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'history-item';
+    btn.setAttribute('role', 'listitem');
+    btn.dataset.id = entry.id;
+    if (entry.id === currentTargetHistoryId) btn.classList.add('active');
+
+    const title = document.createElement('span');
+    title.className = 'history-title';
+    title.textContent = entry?.request?.product || 'Untitled search';
+    btn.appendChild(title);
+
+    const subtitleParts = [];
+    if (entry?.request?.location) subtitleParts.push(entry.request.location);
+    if (Array.isArray(entry?.result?.companies)) {
+      subtitleParts.push(`${entry.result.companies.length} companies`);
+    }
+    if (subtitleParts.length) {
+      const subtitle = document.createElement('span');
+      subtitle.className = 'history-subtitle';
+      subtitle.textContent = subtitleParts.join(' • ');
+      btn.appendChild(subtitle);
+    }
+
+    const meta = document.createElement('span');
+    meta.className = 'history-meta';
+    meta.textContent = formatHistoryTimestamp(entry.createdAt) || '';
+    btn.appendChild(meta);
+
+    targetHistoryList.appendChild(btn);
+  });
+
+  return currentTargetHistoryId;
+}
+
+function setActiveTargetHistoryItem(id) {
+  currentTargetHistoryId = id;
+  if (!targetHistoryList) return;
+  const buttons = targetHistoryList.querySelectorAll('.history-item');
+  buttons.forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.id === id);
+  });
+}
+
+function showTargetHistoryEntry(entry, options = {}) {
+  if (!entry) return;
+  const opts = { updateForm: true, statusText: 'Loaded previous target search.', ...options };
+
+  if (opts.updateForm) {
+    if (targetProductInput) targetProductInput.value = entry?.request?.product || '';
+    if (targetLocationInput) targetLocationInput.value = entry?.request?.location || '';
+    if (targetDocInput) targetDocInput.value = '';
+  }
+
+  const companies = Array.isArray(entry?.result?.companies) ? entry.result.companies : [];
+  renderTargetResults(companies);
+
+  if (typeof opts.statusText === 'string') {
+    setTargetStatus(opts.statusText, { error: false });
+  }
+}
+
+function loadTargetHistory(options = {}) {
+  const opts = { autoShow: false, selectLatest: false, updateForm: true, statusText: 'Loaded previous target search.', ...options };
+  chrome.runtime.sendMessage({ action: 'getTargetHistory' }, (resp) => {
+    const err = chrome.runtime.lastError;
+    if (err) {
+      console.warn('Failed to load target history', err);
+      return;
+    }
+    const entries = resp && Array.isArray(resp.history) ? resp.history : [];
+    const selectedId = renderTargetHistory(entries, opts);
+
+    if (opts.autoShow && selectedId) {
+      const entry = targetHistoryEntries.find(item => item.id === selectedId);
+      if (entry) {
+        showTargetHistoryEntry(entry, { updateForm: opts.updateForm, statusText: opts.statusText });
+        setActiveTargetHistoryItem(selectedId);
+      }
+    } else if (typeof selectedId === 'string') {
+      setActiveTargetHistoryItem(selectedId);
+    }
+  });
+}
 // ---- End helpers ----
 
 generateBtn?.addEventListener('click', async () => {
@@ -1505,5 +1919,19 @@ historyList?.addEventListener('click', (evt) => {
 });
 
 loadHistory({ selectLatest: true, autoShow: true, statusText: '' });
+
+targetHistoryList?.addEventListener('click', (evt) => {
+  const button = evt.target.closest('.history-item');
+  if (!button) return;
+  const { id } = button.dataset;
+  if (!id) return;
+  const entry = targetHistoryEntries.find(item => item.id === id);
+  if (!entry) return;
+  evt.preventDefault();
+  setActiveTargetHistoryItem(id);
+  showTargetHistoryEntry(entry, { updateForm: true });
+});
+
+loadTargetHistory({ selectLatest: true, autoShow: true, statusText: '' });
 
 

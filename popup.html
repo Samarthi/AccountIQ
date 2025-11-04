@@ -30,7 +30,9 @@
           </div>
           <div class='history-section' data-history-section='targetGeneration' hidden>
             <h3>Target History</h3>
-            <div class='history-empty-placeholder'>No targets yet. Generate one to see it here.</div>
+            <button id='newTargetResearch' type='button'>New Research</button>
+            <div id='targetHistoryEmpty' class='history-empty-placeholder'>No targets yet. Generate one to see it here.</div>
+            <div id='targetHistoryList' role='list'></div>
           </div>
         </aside>
         <div id='mainPane'>
@@ -66,9 +68,26 @@
             </div>
           </div>
           <div class='mode-view' data-mode-view='targetGeneration' hidden>
-            <div class='empty-state'>
+            <div class='target-section'>
               <h3>Target Generation</h3>
-              <p>Select this tab when you're ready to build target lists.</p>
+              <p>Provide product context to research target companies in a specific location.</p>
+              <form id='targetForm' class='target-form'>
+                <label for='targetProduct'>Product Name</label>
+                <input id='targetProduct' name='targetProduct' type='text' placeholder='e.g., Cloud Security Platform' autocomplete='off'/>
+                <label for='targetDocInput'>Product Document Upload</label>
+                <input id='targetDocInput' name='targetDocInput' type='file' accept='.txt,.pdf,.doc,.docx,.md,.html'/>
+                <label for='targetLocation'>Location</label>
+                <input id='targetLocation' name='targetLocation' type='text' placeholder='e.g., Singapore'/>
+                <button id='generateTargets' type='submit' class='primary'>Generate Targets</button>
+              </form>
+              <div id='targetStatus' class='target-status' role='status' aria-live='polite'></div>
+              <div id='targetResults' class='target-results' hidden>
+                <div class='target-results-header'>
+                  <h4>Suggested Companies</h4>
+                  <button id='copyTargets' type='button' class='ghost'>Copy Results</button>
+                </div>
+                <ul id='targetResultsList' class='target-results-list'></ul>
+              </div>
             </div>
           </div>
         </div>

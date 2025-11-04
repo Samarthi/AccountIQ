@@ -1,5 +1,6 @@
 const MODEL_ID = "gemini-2.5-flash";
 const EXPORT_TEMPLATE_KEY = "exportTemplate";
+const TARGET_HISTORY_KEY = "targetHistory";
 
 function geminiGenerateUrl(modelId, apiKey, flavor = "generateContent") {
   const base = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:${flavor}`;
@@ -126,6 +127,122 @@ function truncateText(str, max = 3000) {
   if (typeof str !== "string") return "";
   if (str.length <= max) return str;
   return str.substring(0, max) + "...";
+}
+
+function normalizeTargetCompanies(rawList = []) {
+  if (!Array.isArray(rawList)) return [];
+  return rawList
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const name = item.name ? String(item.name).trim() : "";
+      const website = item.website ? String(item.website).trim() : "";
+      const revenue = item.revenue ? String(item.revenue).trim() : "";
+      const notes =
+        item.notes?.toString().trim() ||
+        item.rationale?.toString().trim() ||
+        item.summary?.toString().trim() ||
+        item.reason?.toString().trim() ||
+        "";
+      if (!name) return null;
+      return { name, website, revenue, notes };
+    })
+    .filter(Boolean);
+}
+
+async function generateTargets({ product, location, docName, docText, docBase64 }) {
+  const trimmedProduct = typeof product === "string" ? product.trim() : "";
+  const trimmedLocation = typeof location === "string" ? location.trim() : "";
+
+  if (!trimmedProduct) {
+    return { error: "Product name is required to generate targets." };
+  }
+
+  let documentText = "";
+  if (typeof docText === "string" && docText.trim()) {
+    documentText = docText.trim();
+  } else if (docBase64) {
+    documentText = decodeBase64Text(docBase64);
+  }
+
+  const truncatedDoc = truncateText(documentText, 4000);
+  const docSection = truncatedDoc
+    ? `Supporting document (${docName || "uploaded document"}) excerpt (first 4000 characters):
+${truncatedDoc}`
+    : "No supporting document provided.";
+
+  const prompt = `You are a B2B sales intelligence researcher who uses live web search to validate insights.
+Identify companies located in the specified geography that would be high-priority targets for purchasing the product described below.
+List only companies that plausibly operate in that location and have a clear fit with the product's value.
+
+Product name: ${trimmedProduct}
+Target location: ${trimmedLocation || "Not explicitly provided. Infer a sensible geography from context but prioritize the stated location if any."}
+
+${docSection}
+
+Guidelines:
+- Use search to confirm the company's presence in the target geography, their core business, and the official website.
+- Prefer mid-market or enterprise buyers whose needs align with the product.
+- If revenue is unavailable, leave the revenue field as an empty string.
+- Keep notes to one concise sentence explaining the fit.
+- Return between 5 and 8 distinct companies when possible.
+
+Respond in STRICT JSON with this shape (no Markdown fences, no commentary):
+{
+  "companies": [
+    {
+      "name": "Company name",
+      "website": "https://official.website",
+      "revenue": "Most recent annual revenue or range, or empty string if unknown",
+      "notes": "One sentence on why the company is a fit"
+    }
+  ]
+}`;
+
+  const resp = await callGeminiDirect(prompt, {
+    generationConfig: {
+      temperature: 0.4,
+      maxOutputTokens: 1200,
+    },
+  });
+
+  if (resp.error) {
+    return { error: resp.error, details: resp.details };
+  }
+
+  const rawText = resp.text || "";
+  let parsed = extractJsonFromText(rawText);
+
+  if (!parsed && rawText) {
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (err) {
+      parsed = null;
+    }
+  }
+
+  if (!parsed && resp.raw?.candidates?.[0]?.content?.parts?.length) {
+    const combined = resp.raw.candidates[0].content.parts
+      .map((part) => part?.text || "")
+      .filter(Boolean)
+      .join("\n");
+    if (combined) {
+      parsed = extractJsonFromText(combined);
+      if (!parsed) {
+        try {
+          parsed = JSON.parse(combined);
+        } catch (err) {
+          parsed = null;
+        }
+      }
+    }
+  }
+
+  if (!parsed || !Array.isArray(parsed.companies)) {
+    return { error: "Model did not return a structured company list.", details: rawText || null };
+  }
+
+  const companies = normalizeTargetCompanies(parsed.companies);
+  return { ok: true, companies };
 }
 
 function prepareDatasetForPrompt(entries = []) {
@@ -615,6 +732,35 @@ async function saveResearchHistoryEntry(request, result) {
   }
 }
 
+async function saveTargetHistoryEntry(request, result) {
+  try {
+    const entry = {
+      id: Date.now().toString(),
+      createdAt: new Date().toISOString(),
+      request: {
+        product: request.product || "",
+        location: request.location || "",
+        docName: request.docName || "",
+      },
+      result: {
+        companies: Array.isArray(result?.companies) ? result.companies : [],
+      },
+    };
+
+    const existing = await chrome.storage.local.get([TARGET_HISTORY_KEY]);
+    const history = Array.isArray(existing[TARGET_HISTORY_KEY]) ? existing[TARGET_HISTORY_KEY] : [];
+
+    history.unshift(entry);
+    const trimmed = history.slice(0, 25);
+
+    await chrome.storage.local.set({ [TARGET_HISTORY_KEY]: trimmed });
+    return entry;
+  } catch (err) {
+    console.warn("Failed to persist target history", err);
+    return null;
+  }
+}
+
 async function generateBrief({ company, location, product, docs = [] }) {
   try {
     const docsText = (docs || []).map(d => {
@@ -800,6 +946,23 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           sendResponse({ docs: filtered });
           return;
         }
+        if (req.action === 'generateTargets') {
+          const result = await generateTargets({
+            product: req.product,
+            location: req.location,
+            docName: req.docName,
+            docText: req.docText,
+            docBase64: req.docBase64,
+          });
+          if (result && result.ok) {
+            await saveTargetHistoryEntry(
+              { product: req.product, location: req.location, docName: req.docName },
+              { companies: result.companies }
+            );
+          }
+          sendResponse(result);
+          return;
+        }
         if (req.action === 'generateBrief') {
           const payload = { company: req.company, location: req.location, product: req.product, docs: req.docs || [] };
           const result = await generateBrief(payload);
@@ -807,6 +970,12 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             await saveResearchHistoryEntry(payload, result);
           }
           sendResponse(result);
+          return;
+        }
+        if (req.action === 'getTargetHistory') {
+          const data = await chrome.storage.local.get([TARGET_HISTORY_KEY]);
+          const history = Array.isArray(data[TARGET_HISTORY_KEY]) ? data[TARGET_HISTORY_KEY] : [];
+          sendResponse({ history });
           return;
         }
         if (req.action === 'exportResearch') {
