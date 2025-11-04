@@ -458,7 +458,7 @@ function renderSettingsModal({ body, footer, close }) {
   templateSection.appendChild(templateHeader);
   const templateHelper = document.createElement('p');
   templateHelper.className = 'modal-helper';
-  templateHelper.textContent = 'Add the column headers and descriptions that the export should follow.';
+  templateHelper.textContent = 'Optional: Add the column headers and descriptions that the export should follow.';
   templateSection.appendChild(templateHelper);
   const templateHost = document.createElement('div');
   templateSection.appendChild(templateHost);
@@ -488,12 +488,6 @@ function renderSettingsModal({ body, footer, close }) {
 
     const key = apiInputField.value.trim();
     const columns = templateEditor.getColumns();
-
-    if (!columns.length) {
-      errorEl.textContent = 'Add at least one export column before saving.';
-      errorEl.style.display = 'block';
-      return;
-    }
 
     try {
       if (key) {
