@@ -1,12 +1,6 @@
-# NarrativeTailor Chrome Extension (GenAI)
+# NarrativeTailor Chrome Extension
+The NarrativeTailor Chrome extension turbocharges account research by automating the dull parts with the magic of AI. It helps you:
+- **Win over the right persona in your target company**: Automatically generates the relevant persona for a particular company and product and generates personalised email drafts for each.
+- **Find the right target**: Choose a product and a location and you'll get a list of potential customers, their revenue, and their pain points.
+- **Automate busywork**: Lets you export all your research to excel using AI. Just enter the format of the excel sheet once and NarrativeTailor will do the rest.
 
-This version uses the Google GenAI JS SDK loaded via CDN.
-
-Install:
-1. Extract the folder.
-2. Open Chrome -> chrome://extensions -> Developer mode -> Load unpacked -> select the folder.
-3. In the popup, paste your Gemini API key, upload docs, enter Company + Product, click Generate.
-
-Notes:
-- The extension loads the GenAI SDK from https://esm.run. Ensure your Chrome allows network requests to that host.
-- The SDK will call Google's GenAI endpoints using your API key. Keep your key secure.
