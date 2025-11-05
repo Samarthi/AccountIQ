@@ -24,9 +24,16 @@ async function callGeminiDirect(promptText, opts = {}) {
     "Content-Type": "application/json",
   };
 
-  const generationConfig = opts.generationConfig || {
-    temperature: 0.4,
-    maxOutputTokens: 1200,
+  // Merge caller config with safer, deterministic defaults and clamps
+  const userCfg = opts.generationConfig || {};
+  const generationConfig = {
+    ...userCfg,
+    // Keep temperature low for determinism; clamp to [0, 0.2]
+    temperature: Math.max(0, Math.min(userCfg.temperature ?? 0.1, 0.2)),
+    // Allow large outputs while bounded; default to 100000, clamp to 100000 max
+    maxOutputTokens: Math.min(userCfg.maxOutputTokens ?? 100000, 100000),
+    // Single candidate to reduce variance
+    candidateCount: 1,
   };
     
   const isStructured = generationConfig.responseMimeType === "application/json";
@@ -201,7 +208,7 @@ Respond in STRICT JSON with this shape (no Markdown fences, no commentary):
   const resp = await callGeminiDirect(prompt, {
     generationConfig: {
       temperature: 0.4,
-      maxOutputTokens: 1200,
+      maxOutputTokens: 100000,
     },
   });
 
@@ -803,7 +810,7 @@ async function generateBrief({ company, location, product, docs = [] }) {
     const resp = await callGeminiDirect(prompt, {
       generationConfig: {
         temperature: 0.2,
-        maxOutputTokens: 2048,
+        maxOutputTokens: 4096,
         responseMimeType: "application/json",
       }
     });
