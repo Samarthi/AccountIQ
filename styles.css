@@ -500,6 +500,33 @@ pre {
     gap: 12px;
 }
 
+.telePitchHeader {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.telePitchHint {
+    font-size: 0.85rem;
+    color: #6b7280;
+}
+
+#telePitchSection {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 4px;
+    border-top: 1px dashed #e5e7eb;
+    padding-top: 8px;
+}
+
+#telePitchOut {
+    width: 100%;
+    min-height: 160px;
+}
+
 .emailHeader {
     display: flex;
     align-items: center;
@@ -612,6 +639,61 @@ pre {
     width: 100%;
 }
 
+.target-sectors-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.target-sectors-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 32px;
+    padding: 4px 0;
+}
+
+.target-sectors-chips:empty::before {
+    content: 'No target sectors added yet.';
+    font-size: 0.85rem;
+    color: #9ca3af;
+}
+
+.sector-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background-color: #e0e7ff;
+    color: #1e3a8a;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.sector-chip-remove {
+    background: none;
+    border: none;
+    color: #374151;
+    font-size: 0.95rem;
+    line-height: 1;
+    padding: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.sector-chip-remove:hover {
+    color: #b91c1c;
+}
+
+.target-sectors-hint {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #6b7280;
+}
+
 .target-status {
     min-height: 1.5em;
     font-size: 0.95rem;
@@ -647,6 +729,25 @@ pre {
 .target-results-header h4 {
     margin: 0;
     font-size: 1.05rem;
+}
+
+.target-results-scroll {
+    max-height: 420px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.target-results-scroll::-webkit-scrollbar {
+    width: 6px;
+}
+
+.target-results-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.target-results-scroll::-webkit-scrollbar-thumb {
+    background-color: #cbd5f5;
+    border-radius: 10px;
 }
 
 .target-results-list {

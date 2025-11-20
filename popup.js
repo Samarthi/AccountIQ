@@ -12,6 +12,7 @@ const resultDiv = document.getElementById('result');
 const briefDiv = document.getElementById('brief');
 const personasDiv = document.getElementById('personas');
 const emailOut = document.getElementById('emailOut');
+const telePitchOut = document.getElementById('telePitchOut');
 const copyEmailBtn = document.getElementById('copyEmail');
 const personaTabs = document.getElementById('personaTabs');
 const viewDocs = document.getElementById('viewDocs');
@@ -32,6 +33,8 @@ const historySections = document.querySelectorAll('[data-history-section]');
 const targetForm = document.getElementById('targetForm');
 const targetProductInput = document.getElementById('targetProduct');
 const targetDocInput = document.getElementById('targetDocInput');
+const targetSectorsInput = document.getElementById('targetSectorsInput');
+const targetSectorsChips = document.getElementById('targetSectorsChips');
 const targetLocationInput = document.getElementById('targetLocation');
 const targetStatusEl = document.getElementById('targetStatus');
 const targetResultsSection = document.getElementById('targetResults');
@@ -59,6 +62,9 @@ let activeModalCleanup = null;
 let activeExportState = null;
 let activeMode = null;
 let latestTargetResultsText = '';
+let targetSectors = [];
+let telephonicPitchErrorMessage = '';
+let telephonicPitchDebugAttempts = [];
 
 function setActiveMode(mode) {
   const validModes = Object.values(Mode);
@@ -118,6 +124,85 @@ function resetTargetResults() {
     copyTargetsBtn.disabled = true;
   }
 }
+
+function setTelePitchOutput(message, { isError = false } = {}) {
+  if (!telePitchOut) return;
+  const text = typeof message === 'string' ? message : '';
+  telePitchOut.innerText = text;
+  telePitchOut.style.color = isError ? '#b91c1c' : '';
+}
+
+function normalizeTargetSector(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function renderTargetSectorChips() {
+  if (!targetSectorsChips) return;
+  targetSectorsChips.innerHTML = '';
+
+  targetSectors.forEach((sector) => {
+    const chip = document.createElement('span');
+    chip.className = 'sector-chip';
+
+    const label = document.createElement('span');
+    label.textContent = sector;
+    chip.appendChild(label);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'sector-chip-remove';
+    removeBtn.dataset.action = 'remove-sector';
+    removeBtn.dataset.value = sector;
+    removeBtn.setAttribute('aria-label', `Remove ${sector}`);
+    removeBtn.textContent = '×';
+    chip.appendChild(removeBtn);
+
+    targetSectorsChips.appendChild(chip);
+  });
+}
+
+function addTargetSector(value) {
+  const normalized = normalizeTargetSector(value);
+  if (!normalized) return;
+  const exists = targetSectors.some((sector) => sector.toLowerCase() === normalized.toLowerCase());
+  if (exists) return;
+  targetSectors.push(normalized);
+  renderTargetSectorChips();
+}
+
+function removeTargetSector(value) {
+  const normalized = normalizeTargetSector(value);
+  if (!normalized) return;
+  const idx = targetSectors.findIndex((sector) => sector.toLowerCase() === normalized.toLowerCase());
+  if (idx === -1) return;
+  targetSectors.splice(idx, 1);
+  renderTargetSectorChips();
+}
+
+function setTargetSectors(values = []) {
+  const next = [];
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    const normalized = normalizeTargetSector(value);
+    if (!normalized) return;
+    if (next.some((sector) => sector.toLowerCase() === normalized.toLowerCase())) return;
+    next.push(normalized);
+  });
+
+  targetSectors = next;
+  renderTargetSectorChips();
+}
+
+function commitTargetSectorInput() {
+  if (!targetSectorsInput) return;
+  const pending = normalizeTargetSector(targetSectorsInput.value);
+  if (pending) {
+    addTargetSector(pending);
+  }
+  targetSectorsInput.value = '';
+}
+
+setTargetSectors([]);
 
 function buildTargetsCopyText(companies = []) {
   return companies
@@ -290,9 +375,10 @@ if (modeTabList.length) {
 
 saveKeyBtn?.addEventListener('click', async () => {
   const key = apiKeyInput.value.trim();
-  if (!key) { status.innerText = 'API key required'; return; }
+  if (!key) { status.innerText = 'API key required'; status.style.color = '#b91c1c'; return; }
   await chrome.storage.local.set({ geminiKey: key });
   status.innerText = 'API key saved.';
+  status.style.color = '';
 });
 
 fileInput?.addEventListener('change', async (e) => {
@@ -304,6 +390,7 @@ fileInput?.addEventListener('change', async (e) => {
     chrome.runtime.sendMessage({ action: 'storeDoc', name: f.name, content_b64: b64 });
   }
   status.innerText = 'Uploaded ' + files.length + ' files.';
+  status.style.color = '';
 });
 
 viewDocs?.addEventListener('click', async () => {
@@ -322,6 +409,7 @@ targetForm?.addEventListener('submit', async (evt) => {
   evt.preventDefault();
   const product = targetProductInput?.value.trim() || '';
   const location = targetLocationInput?.value.trim() || '';
+  const sectors = [...targetSectors];
 
   if (!product) {
     setTargetStatus('Product name is required to generate targets.', { error: true });
@@ -347,6 +435,7 @@ targetForm?.addEventListener('submit', async (evt) => {
       action: 'generateTargets',
       product,
       location,
+      sectors,
       docName: docPayload.name,
       docText: docPayload.text,
       docBase64: docPayload.base64,
@@ -385,6 +474,33 @@ targetForm?.addEventListener('submit', async (evt) => {
       }
     }
   );
+});
+
+targetSectorsInput?.addEventListener('input', (evt) => {
+  const value = evt.target.value;
+  if (!value.includes(',')) return;
+  const parts = value.split(',');
+  const remainder = parts.pop();
+  parts.forEach((part) => addTargetSector(part));
+  evt.target.value = remainder ? remainder.trimStart() : '';
+});
+
+targetSectorsInput?.addEventListener('keydown', (evt) => {
+  if (evt.key === 'Enter') {
+    evt.preventDefault();
+    commitTargetSectorInput();
+  }
+});
+
+targetSectorsInput?.addEventListener('blur', () => {
+  commitTargetSectorInput();
+});
+
+targetSectorsChips?.addEventListener('click', (evt) => {
+  const button = evt.target.closest('[data-action="remove-sector"]');
+  if (!button) return;
+  removeTargetSector(button.dataset.value || '');
+  targetSectorsInput?.focus();
 });
 
 copyTargetsBtn?.addEventListener('click', async () => {
@@ -428,7 +544,10 @@ newResearchBtn?.addEventListener('click', () => {
   currentHistoryId = null;
   setActiveHistoryItem('');
 
-  if (status) status.innerText = 'Ready for a new research brief.';
+  if (status) {
+    status.innerText = 'Ready for a new research brief.';
+    status.style.color = '';
+  }
 
   if (resultDiv) resultDiv.style.display = 'none';
   if (briefDiv) briefDiv.innerHTML = '';
@@ -443,6 +562,9 @@ newResearchBtn?.addEventListener('click', () => {
   }
 
   if (emailOut) emailOut.innerText = 'No email generated yet.';
+  telephonicPitchErrorMessage = '';
+  telephonicPitchDebugAttempts = [];
+  setTelePitchOutput('No telephonic pitch generated yet.');
   updateCopyEmailButtonState('');
 });
 
@@ -450,6 +572,8 @@ newTargetResearchBtn?.addEventListener('click', () => {
   if (targetProductInput) targetProductInput.value = '';
   if (targetLocationInput) targetLocationInput.value = '';
   if (targetDocInput) targetDocInput.value = '';
+  if (targetSectorsInput) targetSectorsInput.value = '';
+  setTargetSectors([]);
 
   currentTargetHistoryId = null;
   setActiveTargetHistoryItem('');
@@ -471,7 +595,10 @@ personaTabs?.addEventListener('click', (evt) => {
 copyEmailBtn?.addEventListener('click', async () => {
   const text = emailOut?.innerText || '';
   if (!text.trim()) {
-    if (status) status.innerText = 'No email to copy yet.';
+    if (status) {
+      status.innerText = 'No email to copy yet.';
+      status.style.color = '#b91c1c';
+    }
     return;
   }
 
@@ -480,6 +607,7 @@ copyEmailBtn?.addEventListener('click', async () => {
     if (status) {
       const personaName = getActivePersonaName();
       status.innerText = personaName ? `Email for ${personaName} copied to clipboard.` : 'Email copied to clipboard.';
+      status.style.color = '';
     }
   } catch (err) {
     const helper = document.createElement('textarea');
@@ -495,12 +623,16 @@ copyEmailBtn?.addEventListener('click', async () => {
         if (status) {
           const personaName = getActivePersonaName();
           status.innerText = personaName ? `Email for ${personaName} copied to clipboard.` : 'Email copied to clipboard.';
+          status.style.color = '';
         }
       } else {
         throw new Error('Copy command failed');
       }
     } catch (fallbackErr) {
-      if (status) status.innerText = 'Unable to copy email.';
+      if (status) {
+        status.innerText = 'Unable to copy email.';
+        status.style.color = '#b91c1c';
+      }
       console.warn('Copy failed', fallbackErr);
     } finally {
       document.body.removeChild(helper);
@@ -781,7 +913,10 @@ function triggerDownload(downloadInfo) {
     }, 200);
   } catch (err) {
     console.error('Download failed', err);
-    if (status) status.innerText = 'Unable to start download.';
+    if (status) {
+      status.innerText = 'Unable to start download.';
+      status.style.color = '#b91c1c';
+    }
   }
 }
 
@@ -859,7 +994,10 @@ function renderSettingsModal({ body, footer, close }) {
       }
       await persistExportTemplate({ columns });
       if (apiKeyInput) apiKeyInput.value = key;
-      if (status) status.innerText = 'Settings saved.';
+      if (status) {
+        status.innerText = 'Settings saved.';
+        status.style.color = '';
+      }
       close();
     } catch (err) {
       errorEl.textContent = err?.message || 'Failed to save settings.';
@@ -921,7 +1059,10 @@ function renderTemplateSetupModal({ body, footer, close }) {
     }
     try {
       await persistExportTemplate({ columns });
-      if (status) status.innerText = 'Export template saved.';
+      if (status) {
+        status.innerText = 'Export template saved.';
+        status.style.color = '';
+      }
       openModal({ title: 'Export Research', render: renderExportModal });
     } catch (err) {
       errorEl.textContent = err?.message || 'Failed to save template.';
@@ -1485,7 +1626,7 @@ function clearAndRenderPersonas(personas) {
       a.href = link;
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
-      a.textContent = 'ZoomInfo search';
+      a.textContent = 'Google Search';
       linkWrap.appendChild(a);
       wrapper.appendChild(linkWrap);
     }
@@ -1494,8 +1635,8 @@ function clearAndRenderPersonas(personas) {
   });
 }
 
-function mergePersonaEmails(personas = [], personaEmails = []) {
-  const maxLen = Math.max(personas.length, personaEmails.length);
+function mergePersonaEmails(personas = [], personaEmails = [], personaPitches = []) {
+  const maxLen = Math.max(personas.length, personaEmails.length, personaPitches.length);
   if (!maxLen) return [];
 
   const merged = [];
@@ -1507,6 +1648,15 @@ function mergePersonaEmails(personas = [], personaEmails = []) {
     const personaDepartment = email.personaDepartment || persona.department || '';
     const subject = email.subject || (persona.email && persona.email.subject) || '';
     const body = email.body || (persona.email && persona.email.body) || '';
+    let telePitchEntry = personaPitches[i] || null;
+    if ((!telePitchEntry || typeof telePitchEntry !== 'object' || !Object.keys(telePitchEntry).length) && personaName) {
+      const target = personaName.toLowerCase();
+      telePitchEntry = personaPitches.find((pitch) => {
+        const matchName = pitch?.personaName || pitch?.persona_name || '';
+        return typeof matchName === 'string' && matchName.toLowerCase() === target;
+      }) || null;
+    }
+    const telePitch = formatTelephonicPitchText(telePitchEntry || {});
 
     merged.push({
       personaName,
@@ -1514,6 +1664,7 @@ function mergePersonaEmails(personas = [], personaEmails = []) {
       personaDepartment,
       subject,
       body,
+      telePitch,
     });
   }
 
@@ -1524,6 +1675,41 @@ function formatEmailDraftText(draft = {}) {
   const subject = typeof draft.subject === 'string' ? draft.subject.trim() : '';
   const body = typeof draft.body === 'string' ? draft.body.trim() : '';
   return [subject, body].filter(Boolean).join('\n\n');
+}
+
+function formatTelephonicPitchText(pitch = {}) {
+  if (!pitch || typeof pitch !== 'object') return '';
+  const sections = [];
+  const callGoal = typeof pitch.callGoal === 'string' ? pitch.callGoal.trim() : (typeof pitch.call_goal === 'string' ? pitch.call_goal.trim() : '');
+  if (callGoal) sections.push(`Call Goal: ${callGoal}`);
+  const opener = typeof pitch.opener === 'string' ? pitch.opener.trim() : '';
+  if (opener) sections.push(`Opener: ${opener}`);
+  const discovery = typeof pitch.discoveryQuestion === 'string'
+    ? pitch.discoveryQuestion.trim()
+    : (typeof pitch.discovery_question === 'string' ? pitch.discovery_question.trim() : '');
+  if (discovery) sections.push(`Discovery: ${discovery}`);
+  const valueStatement = typeof pitch.valueStatement === 'string'
+    ? pitch.valueStatement.trim()
+    : (typeof pitch.value_statement === 'string' ? pitch.value_statement.trim() : '');
+  if (valueStatement) sections.push(`Value Statement: ${valueStatement}`);
+  const proof = typeof pitch.proofPoint === 'string'
+    ? pitch.proofPoint.trim()
+    : (typeof pitch.proof_point === 'string' ? pitch.proof_point.trim() : '');
+  if (proof) sections.push(`Proof Point: ${proof}`);
+  const cta = typeof pitch.cta === 'string'
+    ? pitch.cta.trim()
+    : (typeof pitch.closingPrompt === 'string'
+      ? pitch.closingPrompt.trim()
+      : (typeof pitch.closing_prompt === 'string' ? pitch.closing_prompt.trim() : ''));
+  if (cta) sections.push(`CTA: ${cta}`);
+  const script = typeof pitch.script === 'string'
+    ? pitch.script.trim()
+    : (typeof pitch.full_pitch === 'string' ? pitch.full_pitch.trim() : '');
+  if (script) {
+    if (sections.length) sections.push('');
+    sections.push(script);
+  }
+  return sections.join('\n\n').trim();
 }
 
 function formatFallbackEmailText(email) {
@@ -1571,10 +1757,19 @@ function activatePersonaTab(index) {
     emailOut.innerText = 'No email available for this persona yet.';
     updateCopyEmailButtonState('');
   }
+
+  if (telePitchOut) {
+    if (telephonicPitchErrorMessage) {
+      setTelePitchOutput(`Telephonic pitch failed: ${telephonicPitchErrorMessage}`, { isError: true });
+    } else {
+      const pitchText = typeof draft.telePitch === 'string' ? draft.telePitch.trim() : '';
+      setTelePitchOutput(pitchText || 'No telephonic pitch available for this persona yet.');
+    }
+  }
 }
 
-function renderPersonaEmailDrafts(personasData = [], personaEmailsData = [], fallbackEmail) {
-  personaEmailDrafts = mergePersonaEmails(personasData, personaEmailsData);
+function renderPersonaEmailDrafts(personasData = [], personaEmailsData = [], telephonicPitchesData = [], fallbackEmail) {
+  personaEmailDrafts = mergePersonaEmails(personasData, personaEmailsData, telephonicPitchesData);
 
   if (personaTabs) {
     personaTabs.innerHTML = '';
@@ -1614,6 +1809,11 @@ function renderPersonaEmailDrafts(personasData = [], personaEmailsData = [], fal
       emailOut.innerText = 'No email generated yet.';
       updateCopyEmailButtonState('');
     }
+    if (telephonicPitchErrorMessage) {
+      setTelePitchOutput(`Telephonic pitch failed: ${telephonicPitchErrorMessage}`, { isError: true });
+    } else {
+      setTelePitchOutput('No telephonic pitch generated yet.');
+    }
   }
 }
 
@@ -1623,11 +1823,22 @@ function renderResultView(data = {}) {
   resultDiv.style.display = 'block';
   briefDiv.innerHTML = data.brief_html || data.brief || '';
 
+  telephonicPitchErrorMessage = typeof data.telephonicPitchError === 'string'
+    ? data.telephonicPitchError.trim()
+    : '';
+  telephonicPitchDebugAttempts = Array.isArray(data.telephonicPitchAttempts)
+    ? data.telephonicPitchAttempts
+    : [];
+  if (telephonicPitchErrorMessage && telephonicPitchDebugAttempts.length) {
+    console.warn('Telephonic pitch generation attempts', telephonicPitchDebugAttempts);
+  }
+
   const personasData = Array.isArray(data.personas) ? data.personas : [];
   clearAndRenderPersonas(personasData);
 
   const personaEmailsData = Array.isArray(data.personaEmails) ? data.personaEmails : [];
-  renderPersonaEmailDrafts(personasData, personaEmailsData, data.email);
+  const telephonicPitchesData = Array.isArray(data.telephonicPitches) ? data.telephonicPitches : [];
+  renderPersonaEmailDrafts(personasData, personaEmailsData, telephonicPitchesData, data.email);
 
   if (typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(() => {
@@ -1728,8 +1939,17 @@ function showHistoryEntry(entry, options = {}) {
     renderResultView(entry.result);
   }
 
-  if (status && typeof opts.statusText === 'string') {
-    status.innerText = opts.statusText;
+  if (status) {
+    const teleError = typeof entry?.result?.telephonicPitchError === 'string'
+      ? entry.result.telephonicPitchError.trim()
+      : '';
+    if (teleError) {
+      status.innerText = 'Telephonic pitch failed: ' + teleError;
+      status.style.color = '#b91c1c';
+    } else if (typeof opts.statusText === 'string') {
+      status.innerText = opts.statusText;
+      status.style.color = '';
+    }
   }
 }
 
@@ -1844,6 +2064,8 @@ function showTargetHistoryEntry(entry, options = {}) {
     if (targetProductInput) targetProductInput.value = entry?.request?.product || '';
     if (targetLocationInput) targetLocationInput.value = entry?.request?.location || '';
     if (targetDocInput) targetDocInput.value = '';
+    if (targetSectorsInput) targetSectorsInput.value = '';
+    setTargetSectors(entry?.request?.sectors || []);
   }
 
   const companies = Array.isArray(entry?.result?.companies) ? entry.result.companies : [];
@@ -1882,8 +2104,13 @@ generateBtn?.addEventListener('click', async () => {
   const company = companyEl.value.trim();
   const location = locationEl.value.trim();
   const product = productEl.value.trim();
-  if (!company || !product) { status.innerText = 'Company and Product required'; return; }
-  status.innerText = 'Generating…';
+  if (!company || !product) {
+    status.innerText = 'Company and Product required';
+    status.style.color = '#b91c1c';
+    return;
+  }
+  status.innerText = 'Generating...';
+  status.style.color = '';
   resultDiv.style.display = 'none';
   currentHistoryId = null;
 
@@ -1891,16 +2118,24 @@ generateBtn?.addEventListener('click', async () => {
     const docErr = chrome.runtime.lastError;
     if (docErr) {
       status.innerText = 'Failed to load docs: ' + docErr.message;
+      status.style.color = '#b91c1c';
       return;
     }
     const docs = resp && Array.isArray(resp.docs) ? resp.docs : [];
     chrome.runtime.sendMessage({ action: 'generateBrief', company, location, product, docs }, (result) => {
       const genErr = chrome.runtime.lastError;
-      if (genErr) { status.innerText = 'Error: ' + genErr.message; return; }
-      if (!result) { status.innerText = 'Generation failed'; return; }
-      if (result.error) { status.innerText = 'Error: ' + result.error; return; }
+      if (genErr) { status.innerText = 'Error: ' + genErr.message; status.style.color = '#b91c1c'; return; }
+      if (!result) { status.innerText = 'Generation failed'; status.style.color = '#b91c1c'; return; }
+      if (result.error) { status.innerText = 'Error: ' + result.error; status.style.color = '#b91c1c'; return; }
       renderResultView(result);
-      status.innerText = 'Done.';
+      const teleError = typeof result.telephonicPitchError === 'string' ? result.telephonicPitchError.trim() : '';
+      if (teleError) {
+        status.innerText = 'Telephonic pitch failed: ' + teleError;
+        status.style.color = '#b91c1c';
+      } else {
+        status.innerText = 'Done.';
+        status.style.color = '';
+      }
       loadHistory({ selectLatest: true, autoShow: false, updateForm: false, statusText: '' });
     });
   });

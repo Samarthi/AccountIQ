@@ -1,6 +1,7 @@
 const MODEL_ID = "gemini-2.5-flash";
 const EXPORT_TEMPLATE_KEY = "exportTemplate";
 const TARGET_HISTORY_KEY = "targetHistory";
+const TARGET_COMPANY_GOAL = 100;
 
 function geminiGenerateUrl(modelId, apiKey, flavor = "generateContent") {
   const base = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:${flavor}`;
@@ -18,7 +19,7 @@ async function callGeminiDirect(promptText, opts = {}) {
     return { error: "No Gemini API key found. Please add it in the popup." };
   }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${geminiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`;
 
   const headers = {
     "Content-Type": "application/json",
@@ -37,14 +38,22 @@ async function callGeminiDirect(promptText, opts = {}) {
   };
     
   const isStructured = generationConfig.responseMimeType === "application/json";
+  const customContents = Array.isArray(opts.contents) && opts.contents.length ? opts.contents : null;
+  const requestedTools = Array.isArray(opts.tools) && opts.tools.length ? opts.tools.filter(Boolean) : null;
 
   const body = {
-    contents: [{ role: "user", parts: [{ text: promptText }] }],
+    contents: customContents || [{ role: "user", parts: [{ text: promptText || "" }] }],
     generationConfig: generationConfig,
   };
 
-  if (!isStructured) {
+  if (requestedTools && requestedTools.length) {
+    body.tools = requestedTools;
+  } else if (!isStructured) {
     body.tools = [{ google_search: {} }];
+  }
+
+  if (opts.toolConfig && typeof opts.toolConfig === "object") {
+    body.toolConfig = opts.toolConfig;
   }
 
   try {
@@ -138,27 +147,45 @@ function truncateText(str, max = 3000) {
 
 function normalizeTargetCompanies(rawList = []) {
   if (!Array.isArray(rawList)) return [];
-  return rawList
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      const name = item.name ? String(item.name).trim() : "";
-      const website = item.website ? String(item.website).trim() : "";
-      const revenue = item.revenue ? String(item.revenue).trim() : "";
-      const notes =
-        item.notes?.toString().trim() ||
-        item.rationale?.toString().trim() ||
-        item.summary?.toString().trim() ||
-        item.reason?.toString().trim() ||
-        "";
-      if (!name) return null;
-      return { name, website, revenue, notes };
-    })
-    .filter(Boolean);
+  const normalized = [];
+  const seen = new Set();
+
+  for (const item of rawList) {
+    if (!item || typeof item !== "object") continue;
+    const name = item.name ? String(item.name).trim() : "";
+    const website = item.website ? String(item.website).trim() : "";
+    const revenue = item.revenue ? String(item.revenue).trim() : "";
+    const notes =
+      item.notes?.toString().trim() ||
+      item.rationale?.toString().trim() ||
+      item.summary?.toString().trim() ||
+      item.reason?.toString().trim() ||
+      "";
+    if (!name) continue;
+
+    const canonicalName = name.toLowerCase();
+    const normalizedWebsite = website
+      ? website.replace(/^https?:\/\//i, "").replace(/\/+$/, "").toLowerCase()
+      : "";
+    const dedupeKey = `${canonicalName}|${normalizedWebsite}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    normalized.push({ name, website, revenue, notes });
+    if (normalized.length >= TARGET_COMPANY_GOAL) break;
+  }
+
+  return normalized;
 }
 
-async function generateTargets({ product, location, docName, docText, docBase64 }) {
+async function generateTargets({ product, location, sectors, docName, docText, docBase64 }) {
   const trimmedProduct = typeof product === "string" ? product.trim() : "";
   const trimmedLocation = typeof location === "string" ? location.trim() : "";
+  const normalizedSectors = Array.isArray(sectors)
+    ? sectors
+        .map((sector) => (typeof sector === "string" ? sector.trim() : ""))
+        .filter((sector) => !!sector)
+    : [];
 
   if (!trimmedProduct) {
     return { error: "Product name is required to generate targets." };
@@ -177,21 +204,34 @@ async function generateTargets({ product, location, docName, docText, docBase64 
 ${truncatedDoc}`
     : "No supporting document provided.";
 
+  const sectorSection = normalizedSectors.length
+    ? `Target sectors of the product (use these as guardrails): ${normalizedSectors.join(", ")}`
+    : "Target sectors of the product were not provided. Infer the most relevant industries based on the context and product value.";
+
+  const mullInstruction = normalizedSectors.length
+    ? `- Spend several internal reasoning steps comparing "${trimmedProduct}" against each target sector (${normalizedSectors.join(
+        ", "
+      )}) before listing companies. Keep this reasoning private but let it guide your short list so every recommendation clearly fits one of those sectors.`
+    : `- Spend several internal reasoning steps inferring which sectors benefit most from "${trimmedProduct}" before listing companies. Keep this reasoning private but let it guide your short list.`;
+
   const prompt = `You are a B2B sales intelligence researcher who uses live web search to validate insights.
 Identify companies located in the specified geography that would be high-priority targets for purchasing the product described below.
 List only companies that plausibly operate in that location and have a clear fit with the product's value.
 
 Product name: ${trimmedProduct}
 Target location: ${trimmedLocation || "Not explicitly provided. Infer a sensible geography from context but prioritize the stated location if any."}
+${sectorSection}
 
 ${docSection}
 
 Guidelines:
+- ${mullInstruction.replace(/^- /, "")}
 - Use search to confirm the company's presence in the target geography, their core business, and the official website.
 - Prefer mid-market or enterprise buyers whose needs align with the product.
+- Aggressively remove duplicates or near-duplicates so each company appears only once.
+- Provide up to ${TARGET_COMPANY_GOAL} distinct companies, aiming for ${TARGET_COMPANY_GOAL} whenever credible candidates exist. Only return fewer if the market truly lacks more qualified prospects.
 - If revenue is unavailable, leave the revenue field as an empty string.
 - Keep notes to one concise sentence explaining the fit.
-- Return between 5 and 8 distinct companies when possible.
 
 Respond in STRICT JSON with this shape (no Markdown fences, no commentary):
 {
@@ -362,6 +402,77 @@ function filterHistoryEntries(entries, selection = {}) {
   }
 
   return [...entries];
+}
+
+function normalizeLocationString(candidate) {
+  if (!candidate) return "";
+  if (typeof candidate === "string") {
+    return candidate.trim();
+  }
+  if (Array.isArray(candidate)) {
+    const parts = candidate.map((item) => normalizeLocationString(item)).filter(Boolean);
+    return parts.join(", ");
+  }
+  if (typeof candidate === "object") {
+    const prioritizedKeys = [
+      "formatted_address",
+      "address",
+      "address_text",
+      "address_line",
+      "description",
+      "text",
+      "value",
+      "name",
+      "full_address",
+    ];
+    for (const key of prioritizedKeys) {
+      if (typeof candidate[key] === "string" && candidate[key].trim()) {
+        return candidate[key].trim();
+      }
+    }
+
+    const cityParts = [];
+    if (candidate.city) cityParts.push(candidate.city);
+    if (candidate.state || candidate.region || candidate.province) {
+      cityParts.push(candidate.state || candidate.region || candidate.province);
+    }
+    if (candidate.country) cityParts.push(candidate.country);
+    if (cityParts.length) {
+      return cityParts
+        .map((part) => (typeof part === "string" ? part.trim() : ""))
+        .filter(Boolean)
+        .join(", ");
+    }
+  }
+  return "";
+}
+
+function resolveLocationFromStructured(structured) {
+  if (!structured || typeof structured !== "object") return "";
+  const candidates = [
+    structured.hq_location,
+    structured.headquarters,
+    structured.location,
+    structured.answer,
+    structured.result,
+  ];
+
+  if (Array.isArray(structured.supporting_places)) {
+    structured.supporting_places.forEach((place) => {
+      candidates.push(place);
+      if (place && typeof place === "object") {
+        candidates.push(place.formatted_address);
+      }
+    });
+  }
+
+  for (const candidate of candidates) {
+    const normalized = normalizeLocationString(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return "";
 }
 
 function escapeXml(value) {
@@ -717,13 +828,17 @@ async function saveResearchHistoryEntry(request, result) {
         location: request.location || "",
         product: request.product || "",
       },
-        result: {
-          brief_html: result.brief_html || "",
-          personas: Array.isArray(result.personas) ? result.personas : [],
-          personaEmails: Array.isArray(result.personaEmails) ? result.personaEmails : [],
-          email: result.email || {},
-        },
-      };
+      result: {
+        brief_html: result.brief_html || "",
+        personas: Array.isArray(result.personas) ? result.personas : [],
+        personaEmails: Array.isArray(result.personaEmails) ? result.personaEmails : [],
+        industry_sector: typeof result.industry_sector === "string" ? result.industry_sector : "",
+        telephonicPitches: Array.isArray(result.telephonicPitches) ? result.telephonicPitches : [],
+        telephonicPitchError: typeof result.telephonicPitchError === "string" ? result.telephonicPitchError : "",
+        telephonicPitchAttempts: Array.isArray(result.telephonicPitchAttempts) ? result.telephonicPitchAttempts : [],
+        email: result.email || {},
+      },
+    };
 
     const existing = await chrome.storage.local.get(["researchHistory"]);
     const history = Array.isArray(existing.researchHistory) ? existing.researchHistory : [];
@@ -748,6 +863,11 @@ async function saveTargetHistoryEntry(request, result) {
         product: request.product || "",
         location: request.location || "",
         docName: request.docName || "",
+        sectors: Array.isArray(request.sectors)
+          ? request.sectors
+              .map((sector) => (typeof sector === "string" ? sector.trim() : ""))
+              .filter((sector) => !!sector)
+          : [],
       },
       result: {
         companies: Array.isArray(result?.companies) ? result.companies : [],
@@ -768,6 +888,400 @@ async function saveTargetHistoryEntry(request, result) {
   }
 }
 
+async function fetchHeadquartersLocation({ companyName, locationHint }) {
+  if (!companyName) {
+    return { location: "", metadata: null, rawText: "", error: "Missing company name" };
+  }
+
+  const focusInstruction = locationHint
+    ? `If multiple locations exist, prioritize the HQ that governs operations connected to ${locationHint}.`
+    : `Return the official global headquarters registered for the company.`;
+
+  const prompt = `You are verifying the official headquarters for ${companyName}.
+${focusInstruction}
+
+Requirements:
+- Use Google Search to gather the latest authoritative mentions of the headquarters address.
+- Then call the Google Maps tool to pull the place details, coordinates, and formatted address so the answer is grounded in a real map listing.
+- If there are conflicting sources, explain why the selected HQ is most accurate.
+
+Respond strictly in JSON:
+{
+  "hq_location": "City, State/Region, Country",
+  "hq_coordinates": "Latitude,Longitude or descriptive coordinates string",
+  "confidence_notes": "Short justification mentioning Google Search and Google Maps signals",
+  "supporting_places": [
+    {
+      "name": "",
+      "formatted_address": "",
+      "map_url": "",
+      "evidence": "What the Google Maps lookup confirmed"
+    }
+  ]
+}
+`;
+
+  try {
+    const resp = await callGeminiDirect(prompt, {
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 1024,
+        
+      },
+      tools: [{ google_search: {} }, { googleMaps: {} }],
+    });
+
+    if (resp.error) {
+      console.warn("Failed to fetch headquarters location", resp.error, resp.details || resp);
+      return { location: "", metadata: null, rawText: "", error: resp.error };
+    }
+
+    const payloadText = resp.text || "";
+    let parsed = extractJsonFromText(payloadText);
+    if (!parsed && payloadText) {
+      try {
+        parsed = JSON.parse(payloadText);
+      } catch (err) {
+        parsed = null;
+      }
+    }
+
+    if (!parsed && resp.raw?.candidates?.[0]?.content?.parts?.length) {
+      const combined = resp.raw.candidates[0].content.parts
+        .map((part) => part?.text || "")
+        .filter(Boolean)
+        .join("\n");
+      if (combined) {
+        parsed = extractJsonFromText(combined);
+        if (!parsed) {
+          try {
+            parsed = JSON.parse(combined);
+          } catch (err) {
+            parsed = null;
+          }
+        }
+      }
+    }
+
+    const structured = parsed && typeof parsed === "object" ? parsed : null;
+    if (!structured) {
+      return {
+        location: "",
+        metadata: null,
+        rawText: payloadText,
+        error: "Headquarters lookup returned no structured JSON.",
+      };
+    }
+
+    const resolvedLocation = resolveLocationFromStructured(structured);
+
+    if (!resolvedLocation) {
+      return {
+        location: "",
+        metadata: structured,
+        rawText: payloadText,
+        error: "Headquarters lookup did not include a location.",
+      };
+    }
+
+    return {
+      location: resolvedLocation,
+      metadata: structured,
+      rawText: payloadText,
+    };
+  } catch (err) {
+    console.warn("Failed to fetch headquarters location", err);
+    return { location: "", metadata: null, rawText: "", error: err?.message || String(err) };
+  }
+}
+
+function summarizePersonasForTelepitch(personas = []) {
+  if (!Array.isArray(personas) || !personas.length) return "";
+  return personas
+    .map((persona, idx) => {
+      const bits = [
+        `Persona ${idx + 1}:`,
+        `Name: ${persona.name || `Persona ${idx + 1}`}`,
+        persona.designation ? `Designation: ${persona.designation}` : null,
+        persona.department ? `Department: ${persona.department}` : null,
+      ].filter(Boolean);
+      return bits.join(" ");
+    })
+    .join("\n");
+}
+
+function buildTelephonicPitchPrompt({ personas, company, location, product, docsText }) {
+  const personaSummary = summarizePersonasForTelepitch(personas);
+  return `You are a helpful assistant. Generate a concise telephonic sales pitch for the following:
+  Instructions:
+      - Research the product, company priorities, and each persona's responsibilities so the caller sounds well informed and relevant.
+      - Build a 45-60 second phone script for every persona that starts with a personalized opener, adds one probing question, and ties ${product} to their KPIs.
+      - Include a proof or credibility statement plus a clear CTA (Asking for a 20-minute follow-up or meeting).
+      - Maintain a confident, consultative tone that feels natural for a live call. Avoid long email-like sentences.
+      - Here's an example of telephonic pitch: "Hi [Name], this is [Your Name] calling from [Your Company]. Am I catching you at a good time for quick minute?
+      Great, thank you! I'll keep this really short. I work with companies in the [Target company sector]- helping them [your product feature verbs].
+      You might have heard of [Your Product] - it's a solution that helps [Your Product Features]. 
+      For a company like yours, where you're [Target Company Pain Point verbs], [Your Product] can [Your Product's Effects and Improvements].
+      I'd love to set up a short 20 minute demo with our [Relevant Team from Your Company]. 
+      They can walk you through how [Target Company] could use it for [Your Product's Effects and Improvements]. Would that work for you sometime this week?" 
+
+      Company: ${company}
+  Location: ${location || "N/A"}
+  Product: ${product}
+
+  Known personas:
+  ${personaSummary || "None provided. Infer from context."}
+
+  Context docs (first 4000 chars each):
+  ${docsText || "(no docs provided)"}
+
+  Output JSON in this structure EXACTLY. Do not include \`\`\`json markdown wrappers.
+  {
+    "telephonic_pitches": [
+      {"full_pitch": ""}
+    ]
+  }
+
+  Keep each section crisp and action-oriented.`;
+}
+
+function deriveTelephonicPitchArray(payload, depth = 0) {
+  if (!payload || depth > 2) return [];
+  if (Array.isArray(payload)) return payload;
+  if (typeof payload !== "object") return [];
+
+  const candidateKeys = [
+    "telephonic_pitches",
+    "telephonicPitches",
+    "telephonicPitch",
+    "pitches",
+    "scripts",
+    "phone_scripts",
+    "phoneScripts",
+  ];
+
+  for (const key of candidateKeys) {
+    const candidate = payload[key];
+    if (Array.isArray(candidate) && candidate.length) {
+      return candidate;
+    }
+  }
+
+  if (payload.result && typeof payload.result === "object") {
+    const nested = deriveTelephonicPitchArray(payload.result, depth + 1);
+    if (nested.length) return nested;
+  }
+
+  if (payload.data && typeof payload.data === "object") {
+    const nested = deriveTelephonicPitchArray(payload.data, depth + 1);
+    if (nested.length) return nested;
+  }
+
+  return [];
+}
+
+function normalizeTelephonicPitchEntry(pitch, idx, personas) {
+  const fallbackPersona = (Array.isArray(personas) && personas[idx]) || {};
+  const base = {
+    personaName: fallbackPersona.name || `Persona ${idx + 1}`,
+    personaDesignation: fallbackPersona.designation || "",
+    personaDepartment: fallbackPersona.department || "",
+    callGoal: "",
+    opener: "",
+    discoveryQuestion: "",
+    valueStatement: "",
+    proofPoint: "",
+    cta: "",
+    script: "",
+  };
+
+  if (!pitch) return base;
+  if (typeof pitch === "string") {
+    base.script = pitch;
+    return base;
+  }
+  if (typeof pitch !== "object") {
+    return base;
+  }
+
+  base.personaName = pitch.persona_name || pitch.name || base.personaName;
+  base.personaDesignation = pitch.designation || pitch.persona_designation || base.personaDesignation;
+  base.personaDepartment = pitch.department || pitch.persona_department || base.personaDepartment;
+  base.callGoal = pitch.call_goal || pitch.callGoal || pitch.call_objective || pitch.goal || base.callGoal;
+  base.opener = pitch.opener || pitch.opening || pitch.opening_hook || pitch.hook || base.opener;
+
+  if (Array.isArray(pitch.discovery_questions) && pitch.discovery_questions.length) {
+    base.discoveryQuestion = pitch.discovery_questions.join(" / ");
+  } else {
+    base.discoveryQuestion =
+      pitch.discovery_question || pitch.discoveryQuestion || pitch.question || base.discoveryQuestion;
+  }
+
+  base.valueStatement =
+    pitch.value_statement || pitch.valueStatement || pitch.value_pitch || pitch.value || base.valueStatement;
+  base.proofPoint =
+    pitch.proof_point ||
+    pitch.proofPoint ||
+    pitch.credibility_statement ||
+    pitch.social_proof ||
+    base.proofPoint;
+  base.cta = pitch.cta || pitch.closing_prompt || pitch.next_step || pitch.closing || base.cta;
+  base.script = pitch.full_pitch || pitch.fullPitch || pitch.pitch || pitch.call_script || pitch.script || base.script;
+
+  if (!base.script) {
+    const fallbackLines = [
+      base.opener,
+      base.discoveryQuestion ? `Discovery: ${base.discoveryQuestion}` : "",
+      base.valueStatement,
+      base.proofPoint,
+      base.cta,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    base.script = fallbackLines;
+  }
+
+  return base;
+}
+
+function summarizeTelephonicDebugInfo(payload) {
+  if (!payload) return "";
+  let str = "";
+  if (typeof payload === "string") {
+    str = payload;
+  } else {
+    try {
+      str = JSON.stringify(payload);
+    } catch (err) {
+      str = "";
+    }
+  }
+  if (!str) return "";
+  const trimmed = str.trim();
+  if (!trimmed) return "";
+  return trimmed.length > 800 ? `${trimmed.slice(0, 800)}...` : trimmed;
+}
+
+function extractTelephonicPitchResponse(resp, personas) {
+  let teleText = typeof resp.text === "string" ? resp.text : "";
+  let teleParsed = extractJsonFromText(teleText);
+  if (!teleParsed && teleText) {
+    try {
+      teleParsed = JSON.parse(teleText);
+    } catch (err) {
+      teleParsed = null;
+    }
+  }
+
+  if (!teleParsed && resp.raw?.candidates?.[0]?.content?.parts?.length) {
+    const combined = resp.raw.candidates[0].content.parts
+      .map((part) => part?.text || "")
+      .filter(Boolean)
+      .join("\n");
+    if (combined) {
+      teleParsed = extractJsonFromText(combined);
+      if (!teleParsed) {
+        try {
+          teleParsed = JSON.parse(combined);
+        } catch (err) {
+          teleParsed = null;
+        }
+      }
+      if (!teleText) {
+        teleText = combined;
+      }
+    }
+  }
+
+  const teleArray = deriveTelephonicPitchArray(teleParsed);
+  if (!teleArray.length) {
+    return {
+      pitches: [],
+      rawText: teleText || null,
+      error: "Response did not include a telephonic_pitches array.",
+    };
+  }
+
+  const normalized = teleArray
+    .filter((entry) => entry && (typeof entry === "object" || typeof entry === "string"))
+    .map((entry, idx) => normalizeTelephonicPitchEntry(entry, idx, personas))
+    .filter(Boolean);
+
+  if (!normalized.length) {
+    return {
+      pitches: [],
+      rawText: teleText || null,
+      error: "Unable to normalize telephonic pitch entries.",
+    };
+  }
+
+  return { pitches: normalized };
+}
+
+async function generateTelephonicPitchScripts({ personas, company, location, product, docsText }) {
+  const prompt = buildTelephonicPitchPrompt({ personas, company, location, product, docsText });
+  const attempts = [];
+
+  const runAttempt = async (label, structuredOutput) => {
+    try {
+      const generationConfig = {
+        temperature: 0.2,
+        maxOutputTokens: 4096,
+      };
+      if (structuredOutput) {
+        generationConfig.responseMimeType = "application/json";
+      }
+      const teleResp = await callGeminiDirect(prompt, {
+        generationConfig,
+        tools: [{ google_search: {} }],
+      });
+
+      if (teleResp.error) {
+        attempts.push({
+          label,
+          error: teleResp.error,
+          details: summarizeTelephonicDebugInfo(teleResp.details),
+        });
+        return null;
+      }
+
+      const parsed = extractTelephonicPitchResponse(teleResp, personas);
+      if (parsed.pitches.length) {
+        return parsed.pitches;
+      }
+      attempts.push({
+        label,
+        error: parsed.error || "Model response missing telephonic pitches.",
+        details: summarizeTelephonicDebugInfo(parsed.rawText || teleResp.text || teleResp.raw),
+      });
+      return null;
+    } catch (err) {
+      attempts.push({
+        label,
+        error: err?.message || String(err),
+      });
+      return null;
+    }
+  };
+
+  const structuredResult = await runAttempt("json-output", true);
+  if (structuredResult && structuredResult.length) {
+    return { pitches: structuredResult, attempts };
+  }
+
+  const fallbackResult = await runAttempt("text-output", false);
+  if (fallbackResult && fallbackResult.length) {
+    return { pitches: fallbackResult, attempts };
+  }
+
+  const lastError =
+    attempts.length && attempts[attempts.length - 1].error
+      ? attempts[attempts.length - 1].error
+      : "Unable to generate telephonic pitches.";
+
+  return { pitches: [], error: lastError, attempts };
+}
+
 async function generateBrief({ company, location, product, docs = [] }) {
   try {
     const docsText = (docs || []).map(d => {
@@ -780,10 +1294,13 @@ async function generateBrief({ company, location, product, docs = [] }) {
       - Search for the product and what the product's objectives are.
       - Based on the product's objectives, list out the key personas that would be making purchase decisions such as CTO, VP, Procurement Officers etc.
       - Search for the designation and department of each of the personas in the company.
-      - Search for the company's HQ in India, revenue and figure out the revenue revenue_estimate.
+      - Search for the recent news headlines related the target company.
+      - Search for the company's revenue, Industry Sector and provide a realistic revenue_estimate.
       - For each persona, craft a separate outreach email from the seller to that persona highlighting product value for their responsibilities.
       - Each persona email must include a clear subject line and a concise, professional body tailored to that persona.
       - Search and include the ZoomInfo OR LinkedIn OR Cognism link for each persona as a search string link. DO NOT INCLUDE the term "google search:"
+      - The email should have a strong sales pitch tone. 
+      - As an example take the following reference: "Hi [Name], this is [Your Name] from IBM. I'll keep this really short - I work with [Target Sector] leaders on speeding up how they move and manage large files securely. I want to quickly bring up [Product] - [Product Description]. For a Company like [Company Name], where you're [Company objectives and core sector verbs]- [Product] can help streamline [Pain points]. Would it make sense to schedule a quick 20 minute discussion with your [relevant team]- just to explore if this could optimize your [core sectoral verbs]?"
   Company: ${company}
   Location: ${location || "N/A"}
   Product: ${product}
@@ -795,7 +1312,7 @@ async function generateBrief({ company, location, product, docs = [] }) {
   {
     "company_name": "",
     "revenue_estimate": "",
-    "hq_location": "",
+    "industry_sector":'',
     "top_5_news": [
       {"title": "", "summary": ""}
     ],
@@ -810,9 +1327,9 @@ async function generateBrief({ company, location, product, docs = [] }) {
     const resp = await callGeminiDirect(prompt, {
       generationConfig: {
         temperature: 0.2,
-        maxOutputTokens: 4096,
-        responseMimeType: "application/json",
-      }
+        maxOutputTokens: 4096
+      },
+      tools: [{ google_search: {} }],
     });
 
     if (resp.error) return { error: resp.error + (resp.details ? ' Details: ' + JSON.stringify(resp.details) : ''), attempts: resp.details || [] };
@@ -824,8 +1341,24 @@ async function generateBrief({ company, location, product, docs = [] }) {
       return { brief: outText || "No output from model.", raw: outText, error: "Model did not return valid JSON." };
     }
 
+    const hqLookup = await fetchHeadquartersLocation({
+      companyName: parsed.company_name || company,
+      locationHint: location || "",
+    });
+    const resolvedHqLocation = hqLookup?.location || parsed.hq_location || "";
+    const hqErrorMessage = hqLookup?.error ? `HQ lookup failed: ${hqLookup.error}` : "";
+    const displayedHq = resolvedHqLocation || hqErrorMessage || "Not found";
+    const industrySector =
+      parsed.industry_sector ||
+      parsed.industrySector ||
+      parsed.industry ||
+      "";
+    const displayedIndustry = industrySector || "Not found";
+
     let brief_html = `<h4>${parsed.company_name || company}</h4>`;
-    brief_html += `<p><strong>Headquarters:</strong> ${parsed.hq_location || ""} &nbsp; <strong>Revenue:</strong> ${parsed.revenue_estimate || ""}</p>`;
+    brief_html += `<p><strong>Headquarters:</strong> ${displayedHq} &nbsp; <strong>Revenue:</strong> ${
+      parsed.revenue_estimate || ""
+    } &nbsp; <strong>Industry sector:</strong> ${displayedIndustry}</p>`;
     if (parsed.top_5_news && parsed.top_5_news.length) {
       brief_html += `<h5>Top News</h5><ul>`;
       parsed.top_5_news.slice(0, 5).forEach(n => brief_html += `<li><strong>${n.title || ""}</strong><div>${n.summary || ""}</div></li>`);
@@ -900,6 +1433,30 @@ async function generateBrief({ company, location, product, docs = [] }) {
       }
     }
 
+    let telephonicPitches = [];
+    let telephonicPitchError = "";
+    let telephonicPitchAttempts = [];
+    if (personas.length) {
+      try {
+        const teleResult = await generateTelephonicPitchScripts({
+          personas,
+          company,
+          location,
+          product,
+          docsText,
+        });
+        telephonicPitches = Array.isArray(teleResult.pitches) ? teleResult.pitches : [];
+        telephonicPitchError = teleResult.error || "";
+        telephonicPitchAttempts = Array.isArray(teleResult.attempts) ? teleResult.attempts : [];
+        if (telephonicPitchError) {
+          console.warn("Telephonic pitch generation failed", telephonicPitchError, telephonicPitchAttempts);
+        }
+      } catch (teleErr) {
+        telephonicPitchError = teleErr?.message || String(teleErr);
+        console.warn("Telephonic pitch generation threw", teleErr);
+      }
+    }
+
     let emailObj = { subject: "", body: "" };
     if (personaEmails.length) {
       emailObj.subject = personaEmails[0]?.subject || "";
@@ -915,7 +1472,21 @@ async function generateBrief({ company, location, product, docs = [] }) {
       }
     }
 
-    return { brief_html, personas, personaEmails, email: emailObj, raw: outText };
+    return {
+      brief_html,
+      personas,
+      personaEmails,
+      industry_sector: industrySector,
+      telephonicPitches,
+      telephonicPitchError,
+      telephonicPitchAttempts,
+      email: emailObj,
+      hq_location: resolvedHqLocation,
+      hq_lookup_details: hqLookup?.metadata || null,
+      hq_lookup_error: hqLookup?.error || "",
+      hq_lookup_raw: hqLookup?.rawText || "",
+      raw: outText,
+    };
   } catch (err) {
     return { error: String(err) };
   }
@@ -957,13 +1528,14 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           const result = await generateTargets({
             product: req.product,
             location: req.location,
+            sectors: req.sectors,
             docName: req.docName,
             docText: req.docText,
             docBase64: req.docBase64,
           });
           if (result && result.ok) {
             await saveTargetHistoryEntry(
-              { product: req.product, location: req.location, docName: req.docName },
+              { product: req.product, location: req.location, docName: req.docName, sectors: req.sectors },
               { companies: result.companies }
             );
           }

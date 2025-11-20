@@ -60,6 +60,13 @@
                   </div>
                   <div id='personaTabs' role='tablist' aria-label='Persona email drafts'></div>
                   <pre id='emailOut'></pre>
+                  <div id='telePitchSection'>
+                    <div class='telePitchHeader'>
+                      <h4>Telephonic Pitch</h4>
+                      <span class='telePitchHint'>Updates with persona selection.</span>
+                    </div>
+                    <pre id='telePitchOut'>No telephonic pitch generated yet.</pre>
+                  </div>
                 </div>
               </div>
             </div>
@@ -73,6 +80,12 @@
                 <input id='targetProduct' name='targetProduct' type='text' placeholder='e.g., Cloud Security Platform' autocomplete='off'/>
                 <label for='targetDocInput'>Product Document Upload</label>
                 <input id='targetDocInput' name='targetDocInput' type='file' accept='.txt,.pdf,.doc,.docx,.md,.html'/>
+                <label for='targetSectorsInput'>Target Sectors of the Product</label>
+                <div class='target-sectors-field'>
+                  <div id='targetSectorsChips' class='target-sectors-chips' aria-live='polite' aria-label='Selected target sectors'></div>
+                  <input id='targetSectorsInput' name='targetSectorsInput' type='text' placeholder='e.g., FinTech, Healthcare' autocomplete='off'/>
+                  <p class='target-sectors-hint'>Type a sector and press comma to add it. Remove a sector with ×.</p>
+                </div>
                 <label for='targetLocation'>Location</label>
                 <input id='targetLocation' name='targetLocation' type='text' placeholder='e.g., Singapore'/>
                 <button id='generateTargets' type='submit' class='primary'>Generate Targets</button>
@@ -83,7 +96,9 @@
                   <h4>Suggested Companies</h4>
                   <button id='copyTargets' type='button' class='ghost'>Copy Results</button>
                 </div>
-                <ul id='targetResultsList' class='target-results-list'></ul>
+                <div class='target-results-scroll'>
+                  <ul id='targetResultsList' class='target-results-list'></ul>
+                </div>
               </div>
             </div>
           </div>
