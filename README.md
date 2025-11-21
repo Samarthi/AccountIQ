@@ -8,6 +8,11 @@ The NarrativeTailor Chrome extension turbocharges account research by automating
 
 ## Installation
 ### Chrome
-1. Download the latest release [here](https://github.com/nabanitahalder1000-ops/AccountIQ/releases). 
+1. Clone the repository. 
 2. Turn on Developer Settings, then click on "Load Unpacked"
-3. Choose the AccountIQ.crx file that was downloaded.
+3. Choose the AccountIQ folder.
+
+## Setup
+This uses Gemini for LLM-based generation, so you'll need to enter your own API key. To add your own Gemini key,
+1. Navigate to the settings button on the bottom left corner of the app
+2. Paste your Gemini key in the designated location and save it
