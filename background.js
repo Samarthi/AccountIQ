@@ -1,15 +1,21 @@
-const MODEL_ID = "gemini-2.5-flash";
 const EXPORT_TEMPLATE_KEY = "exportTemplate";
 const TARGET_HISTORY_KEY = "targetHistory";
+const RESEARCH_HISTORY_KEY = "researchHistory";
 const TARGET_COMPANY_GOAL = 100;
 
-function geminiGenerateUrl(modelId, apiKey, flavor = "generateContent") {
-  const base = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:${flavor}`;
-
-  if (apiKey && apiKey.length) {
-    return `${base}?key=${encodeURIComponent(apiKey)}`;
+function emitBriefProgress({ runId, current, total, label }) {
+  if (!runId) return;
+  try {
+    chrome.runtime.sendMessage({
+      action: "briefProgress",
+      runId,
+      current,
+      total,
+      label,
+    });
+  } catch (err) {
+    // Ignore transient messaging errors
   }
-  return base;
 }
 
 async function callGeminiDirect(promptText, opts = {}) {
@@ -115,6 +121,35 @@ function extractJsonFromText(s) {
     const cleaned = sub.replace(/[\u2018\u2019\u201C\u201D]/g, '"').replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
     try { return JSON.parse(cleaned); } catch (e2) { return null; }
   }
+}
+
+function parseModelJsonResponse(resp) {
+  const tryParseText = (text) => {
+    if (!text) return null;
+    const structured = extractJsonFromText(text);
+    if (structured) return structured;
+    try {
+      return JSON.parse(text);
+    } catch (err) {
+      return null;
+    }
+  };
+
+  let rawText = typeof resp?.text === "string" ? resp.text : "";
+  let parsed = tryParseText(rawText);
+
+  if (!parsed && resp?.raw?.candidates?.[0]?.content?.parts?.length) {
+    const combined = resp.raw.candidates[0].content.parts
+      .map((part) => part?.text || "")
+      .filter(Boolean)
+      .join("\n");
+    if (combined) {
+      rawText = rawText || combined;
+      parsed = tryParseText(combined);
+    }
+  }
+
+  return { parsed, rawText };
 }
 
 function decodeBase64Text(b64) {
@@ -256,33 +291,7 @@ Respond in STRICT JSON with this shape (no Markdown fences, no commentary):
     return { error: resp.error, details: resp.details };
   }
 
-  const rawText = resp.text || "";
-  let parsed = extractJsonFromText(rawText);
-
-  if (!parsed && rawText) {
-    try {
-      parsed = JSON.parse(rawText);
-    } catch (err) {
-      parsed = null;
-    }
-  }
-
-  if (!parsed && resp.raw?.candidates?.[0]?.content?.parts?.length) {
-    const combined = resp.raw.candidates[0].content.parts
-      .map((part) => part?.text || "")
-      .filter(Boolean)
-      .join("\n");
-    if (combined) {
-      parsed = extractJsonFromText(combined);
-      if (!parsed) {
-        try {
-          parsed = JSON.parse(combined);
-        } catch (err) {
-          parsed = null;
-        }
-      }
-    }
-  }
+  const { parsed, rawText } = parseModelJsonResponse(resp);
 
   if (!parsed || !Array.isArray(parsed.companies)) {
     return { error: "Model did not return a structured company list.", details: rawText || null };
@@ -818,6 +827,17 @@ function generateMarkdownFromRows(headers, rows) {
   return `${headerLine}\n${separator}${body ? `\n${body}` : ""}`;
 }
 
+async function persistHistoryEntry(storageKey, entry, limit = 25) {
+  const existing = await chrome.storage.local.get([storageKey]);
+  const history = Array.isArray(existing[storageKey]) ? existing[storageKey] : [];
+
+  history.unshift(entry);
+  const trimmed = history.slice(0, limit);
+
+  await chrome.storage.local.set({ [storageKey]: trimmed });
+  return entry;
+}
+
 async function saveResearchHistoryEntry(request, result) {
   try {
     const entry = {
@@ -840,14 +860,7 @@ async function saveResearchHistoryEntry(request, result) {
       },
     };
 
-    const existing = await chrome.storage.local.get(["researchHistory"]);
-    const history = Array.isArray(existing.researchHistory) ? existing.researchHistory : [];
-
-    history.unshift(entry);
-    const trimmed = history.slice(0, 25);
-
-    await chrome.storage.local.set({ researchHistory: trimmed });
-    return entry;
+    return await persistHistoryEntry(RESEARCH_HISTORY_KEY, entry);
   } catch (err) {
     console.warn("Failed to persist research history", err);
     return null;
@@ -874,14 +887,7 @@ async function saveTargetHistoryEntry(request, result) {
       },
     };
 
-    const existing = await chrome.storage.local.get([TARGET_HISTORY_KEY]);
-    const history = Array.isArray(existing[TARGET_HISTORY_KEY]) ? existing[TARGET_HISTORY_KEY] : [];
-
-    history.unshift(entry);
-    const trimmed = history.slice(0, 25);
-
-    await chrome.storage.local.set({ [TARGET_HISTORY_KEY]: trimmed });
-    return entry;
+    return await persistHistoryEntry(TARGET_HISTORY_KEY, entry);
   } catch (err) {
     console.warn("Failed to persist target history", err);
     return null;
@@ -907,17 +913,7 @@ Requirements:
 
 Respond strictly in JSON:
 {
-  "hq_location": "City, State/Region, Country",
-  "hq_coordinates": "Latitude,Longitude or descriptive coordinates string",
-  "confidence_notes": "Short justification mentioning Google Search and Google Maps signals",
-  "supporting_places": [
-    {
-      "name": "",
-      "formatted_address": "",
-      "map_url": "",
-      "evidence": "What the Google Maps lookup confirmed"
-    }
-  ]
+  "hq_location": "City, State/Region, Country"
 }
 `;
 
@@ -925,7 +921,7 @@ Respond strictly in JSON:
     const resp = await callGeminiDirect(prompt, {
       generationConfig: {
         temperature: 0.1,
-        maxOutputTokens: 1024,
+        maxOutputTokens: 9000,
         
       },
       tools: [{ google_search: {} }, { googleMaps: {} }],
@@ -936,39 +932,14 @@ Respond strictly in JSON:
       return { location: "", metadata: null, rawText: "", error: resp.error };
     }
 
-    const payloadText = resp.text || "";
-    let parsed = extractJsonFromText(payloadText);
-    if (!parsed && payloadText) {
-      try {
-        parsed = JSON.parse(payloadText);
-      } catch (err) {
-        parsed = null;
-      }
-    }
-
-    if (!parsed && resp.raw?.candidates?.[0]?.content?.parts?.length) {
-      const combined = resp.raw.candidates[0].content.parts
-        .map((part) => part?.text || "")
-        .filter(Boolean)
-        .join("\n");
-      if (combined) {
-        parsed = extractJsonFromText(combined);
-        if (!parsed) {
-          try {
-            parsed = JSON.parse(combined);
-          } catch (err) {
-            parsed = null;
-          }
-        }
-      }
-    }
+    const { parsed, rawText } = parseModelJsonResponse(resp);
 
     const structured = parsed && typeof parsed === "object" ? parsed : null;
     if (!structured) {
       return {
         location: "",
         metadata: null,
-        rawText: payloadText,
+        rawText,
         error: "Headquarters lookup returned no structured JSON.",
       };
     }
@@ -979,7 +950,7 @@ Respond strictly in JSON:
       return {
         location: "",
         metadata: structured,
-        rawText: payloadText,
+        rawText,
         error: "Headquarters lookup did not include a location.",
       };
     }
@@ -987,7 +958,7 @@ Respond strictly in JSON:
     return {
       location: resolvedLocation,
       metadata: structured,
-      rawText: payloadText,
+      rawText,
     };
   } catch (err) {
     console.warn("Failed to fetch headquarters location", err);
@@ -1282,12 +1253,45 @@ async function generateTelephonicPitchScripts({ personas, company, location, pro
   return { pitches: [], error: lastError, attempts };
 }
 
-async function generateBrief({ company, location, product, docs = [] }) {
+async function generateBrief({ company, location, product, docs = [], runId }) {
   try {
+    let totalSteps = 2;
+    let completedSteps = 0;
+    emitBriefProgress({
+      runId,
+      current: completedSteps,
+      total: totalSteps,
+      label: "Starting brief request",
+    });
+
     const docsText = (docs || []).map(d => {
       const txt = decodeBase64Text(d.content_b64 || d.content || "");
       return `--- ${d.name || "doc"} ---\n${txt.substring(0, 4000)}`;
     }).join("\n\n");
+
+    const hqProgressed = () => {
+      completedSteps = Math.min(totalSteps, completedSteps + 1);
+      emitBriefProgress({
+        runId,
+        current: completedSteps,
+        total: totalSteps,
+        label: "Headquarters located",
+      });
+    };
+
+    const hqPromise = fetchHeadquartersLocation({
+      companyName: company,
+      locationHint: location || "",
+    })
+      .then((res) => {
+        hqProgressed();
+        return res;
+      })
+      .catch((hqErr) => {
+        console.warn("Headquarters lookup failed", hqErr);
+        hqProgressed();
+        return { location: "", metadata: null, rawText: "", error: hqErr?.message || String(hqErr) };
+      });
 
       const prompt = `You are a helpful assistant. Generate a concise sales brief for the following:
   Instructions:
@@ -1300,6 +1304,7 @@ async function generateBrief({ company, location, product, docs = [] }) {
       - Each persona email must include a clear subject line and a concise, professional body tailored to that persona.
       - Search and include the ZoomInfo OR LinkedIn OR Cognism link for each persona as a search string link. DO NOT INCLUDE the term "google search:"
       - The email should have a strong sales pitch tone. 
+      - For each persona, also generate a 45-60 second telephonic pitch that includes: a personalized opener, one discovery question, a value statement tied to ${product}, a proof/credibility point, a clear CTA, and a concise full_pitch string suitable for live delivery.
       - As an example take the following reference: "Hi [Name], this is [Your Name] from IBM. I'll keep this really short - I work with [Target Sector] leaders on speeding up how they move and manage large files securely. I want to quickly bring up [Product] - [Product Description]. For a Company like [Company Name], where you're [Company objectives and core sector verbs]- [Product] can help streamline [Pain points]. Would it make sense to schedule a quick 20 minute discussion with your [relevant team]- just to explore if this could optimize your [core sectoral verbs]?"
   Company: ${company}
   Location: ${location || "N/A"}
@@ -1318,6 +1323,9 @@ async function generateBrief({ company, location, product, docs = [] }) {
     ],
     "key_personas": [
       {"name": "", "designation": "", "department": "", "zoominfo_link": "", "email": {"subject": "", "body": ""}}
+    ],
+    "telephonic_pitches": [
+      {"persona_name": "", "designation": "", "department": "", "opener": "", "discovery_question": "", "value_statement": "", "proof_point": "", "cta": "", "full_pitch": ""}
     ]
   }
 
@@ -1327,45 +1335,25 @@ async function generateBrief({ company, location, product, docs = [] }) {
     const resp = await callGeminiDirect(prompt, {
       generationConfig: {
         temperature: 0.2,
-        maxOutputTokens: 4096
+        maxOutputTokens: 12000
       },
       tools: [{ google_search: {} }],
     });
 
     if (resp.error) return { error: resp.error + (resp.details ? ' Details: ' + JSON.stringify(resp.details) : ''), attempts: resp.details || [] };
 
-    const outText = resp.text || resp.raw || "";
-    const parsed = extractJsonFromText(outText);
-    
+    const { parsed, rawText } = parseModelJsonResponse(resp);
     if (!parsed) {
-      return { brief: outText || "No output from model.", raw: outText, error: "Model did not return valid JSON." };
+      return { brief: rawText || "No output from model.", raw: rawText, error: "Model did not return valid JSON." };
     }
+    completedSteps += 1;
 
-    const hqLookup = await fetchHeadquartersLocation({
-      companyName: parsed.company_name || company,
-      locationHint: location || "",
+    emitBriefProgress({
+      runId,
+      current: completedSteps,
+      total: totalSteps,
+      label: "Brief and telephonic pitches generated",
     });
-    const resolvedHqLocation = hqLookup?.location || parsed.hq_location || "";
-    const hqErrorMessage = hqLookup?.error ? `HQ lookup failed: ${hqLookup.error}` : "";
-    const displayedHq = resolvedHqLocation || hqErrorMessage || "Not found";
-    const industrySector =
-      parsed.industry_sector ||
-      parsed.industrySector ||
-      parsed.industry ||
-      "";
-    const displayedIndustry = industrySector || "Not found";
-
-    let brief_html = `<h4>${parsed.company_name || company}</h4>`;
-    brief_html += `<p><strong>Headquarters:</strong> ${displayedHq} &nbsp; <strong>Revenue:</strong> ${
-      parsed.revenue_estimate || ""
-    } &nbsp; <strong>Industry sector:</strong> ${displayedIndustry}</p>`;
-    if (parsed.top_5_news && parsed.top_5_news.length) {
-      brief_html += `<h5>Top News</h5><ul>`;
-      parsed.top_5_news.slice(0, 5).forEach(n => brief_html += `<li><strong>${n.title || ""}</strong><div>${n.summary || ""}</div></li>`);
-      brief_html += `</ul>`;
-    } else {
-      brief_html += `<h5>Top News</h5><p>No recent headlines found.</p>`;
-    }
 
     function buildZoomInfoSearchLink(persona, companyName) {
         const parts = [];
@@ -1436,25 +1424,48 @@ async function generateBrief({ company, location, product, docs = [] }) {
     let telephonicPitches = [];
     let telephonicPitchError = "";
     let telephonicPitchAttempts = [];
-    if (personas.length) {
-      try {
-        const teleResult = await generateTelephonicPitchScripts({
-          personas,
-          company,
-          location,
-          product,
-          docsText,
-        });
-        telephonicPitches = Array.isArray(teleResult.pitches) ? teleResult.pitches : [];
-        telephonicPitchError = teleResult.error || "";
-        telephonicPitchAttempts = Array.isArray(teleResult.attempts) ? teleResult.attempts : [];
-        if (telephonicPitchError) {
-          console.warn("Telephonic pitch generation failed", telephonicPitchError, telephonicPitchAttempts);
-        }
-      } catch (teleErr) {
-        telephonicPitchError = teleErr?.message || String(teleErr);
-        console.warn("Telephonic pitch generation threw", teleErr);
+    const telephonicRaw = deriveTelephonicPitchArray(parsed);
+    if (telephonicRaw.length) {
+      telephonicPitches = telephonicRaw
+        .filter((entry) => entry && (typeof entry === "object" || typeof entry === "string"))
+        .map((entry, idx) => normalizeTelephonicPitchEntry(entry, idx, personas))
+        .filter(Boolean);
+      if (!telephonicPitches.length) {
+        telephonicPitchError = "Telephonic pitches present but could not be normalized.";
       }
+    } else {
+      telephonicPitchError = "Model response missing telephonic_pitches array.";
+    }
+
+    const [hqLookupResult] = await Promise.all([hqPromise]);
+    completedSteps = Math.max(completedSteps, totalSteps);
+    emitBriefProgress({
+      runId,
+      current: totalSteps,
+      total: totalSteps,
+      label: "Brief ready",
+    });
+
+    const resolvedHqLocation = hqLookupResult?.location || parsed.hq_location || "";
+    const hqErrorMessage = hqLookupResult?.error ? `HQ lookup failed: ${hqLookupResult.error}` : "";
+    const displayedHq = resolvedHqLocation || hqErrorMessage || "Not found";
+    const industrySector =
+      parsed.industry_sector ||
+      parsed.industrySector ||
+      parsed.industry ||
+      "";
+    const displayedIndustry = industrySector || "Not found";
+
+    let brief_html = `<h4>${parsed.company_name || company}</h4>`;
+    brief_html += `<p><strong>Headquarters:</strong> ${displayedHq} &nbsp; <strong>Revenue:</strong> ${
+      parsed.revenue_estimate || ""
+    } &nbsp; <strong>Industry sector:</strong> ${displayedIndustry}</p>`;
+    if (parsed.top_5_news && parsed.top_5_news.length) {
+      brief_html += `<h5>Top News</h5><ul>`;
+      parsed.top_5_news.slice(0, 5).forEach(n => brief_html += `<li><strong>${n.title || ""}</strong><div>${n.summary || ""}</div></li>`);
+      brief_html += `</ul>`;
+    } else {
+      brief_html += `<h5>Top News</h5><p>No recent headlines found.</p>`;
     }
 
     let emailObj = { subject: "", body: "" };
@@ -1482,10 +1493,10 @@ async function generateBrief({ company, location, product, docs = [] }) {
       telephonicPitchAttempts,
       email: emailObj,
       hq_location: resolvedHqLocation,
-      hq_lookup_details: hqLookup?.metadata || null,
-      hq_lookup_error: hqLookup?.error || "",
-      hq_lookup_raw: hqLookup?.rawText || "",
-      raw: outText,
+      hq_lookup_details: hqLookupResult?.metadata || null,
+      hq_lookup_error: hqLookupResult?.error || "",
+      hq_lookup_raw: hqLookupResult?.rawText || "",
+      raw: rawText,
     };
   } catch (err) {
     return { error: String(err) };
@@ -1543,7 +1554,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           return;
         }
         if (req.action === 'generateBrief') {
-          const payload = { company: req.company, location: req.location, product: req.product, docs: req.docs || [] };
+          const payload = { company: req.company, location: req.location, product: req.product, docs: req.docs || [], runId: req.runId };
           const result = await generateBrief(payload);
           if (!result.error) {
             await saveResearchHistoryEntry(payload, result);
@@ -1589,8 +1600,8 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             return;
           }
 
-          const storedData = await chrome.storage.local.get(["researchHistory"]);
-          const history = Array.isArray(storedData.researchHistory) ? storedData.researchHistory : [];
+          const storedData = await chrome.storage.local.get([RESEARCH_HISTORY_KEY]);
+          const history = Array.isArray(storedData[RESEARCH_HISTORY_KEY]) ? storedData[RESEARCH_HISTORY_KEY] : [];
 
           if (!history.length) {
             sendResponse({ error: "No research history available to export." });
@@ -1617,35 +1628,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             return;
           }
 
-          const payloadText = llmResult.text || "";
-          let parsed = extractJsonFromText(payloadText);
-          if (!parsed && payloadText) {
-            try {
-              parsed = JSON.parse(payloadText);
-            } catch (err) {
-              parsed = null;
-            }
-          }
-
-          if (!parsed && llmResult.raw?.candidates?.[0]?.content?.parts?.length) {
-            const combined = llmResult.raw.candidates[0].content.parts
-              .map((part) => part?.text || "")
-              .filter(Boolean)
-              .join("\n");
-            if (combined) {
-              parsed = extractJsonFromText(combined);
-              if (!parsed) {
-                try {
-                  parsed = JSON.parse(combined);
-                } catch (err) {
-                  parsed = null;
-                }
-              }
-            }
-          }
+          const { parsed, rawText } = parseModelJsonResponse(llmResult);
 
           if (!parsed || !Array.isArray(parsed.rows)) {
-            sendResponse({ error: "Model did not return structured rows for export.", details: payloadText || null });
+            sendResponse({ error: "Model did not return structured rows for export.", details: rawText || null });
             return;
           }
 
@@ -1704,8 +1690,8 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           return;
         }
         if (req.action === 'getResearchHistory') {
-          const data = await chrome.storage.local.get(['researchHistory']);
-          const history = Array.isArray(data.researchHistory) ? data.researchHistory : [];
+          const data = await chrome.storage.local.get([RESEARCH_HISTORY_KEY]);
+          const history = Array.isArray(data[RESEARCH_HISTORY_KEY]) ? data[RESEARCH_HISTORY_KEY] : [];
           sendResponse({ history });
           return;
         }

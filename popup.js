@@ -65,6 +65,7 @@ let latestTargetResultsText = '';
 let targetSectors = [];
 let telephonicPitchErrorMessage = '';
 let telephonicPitchDebugAttempts = [];
+const briefProgressState = { runId: null, total: 0, current: 0 };
 
 function setActiveMode(mode) {
   const validModes = Object.values(Mode);
@@ -203,6 +204,52 @@ function commitTargetSectorInput() {
 }
 
 setTargetSectors([]);
+
+function resetBriefProgress() {
+  briefProgressState.runId = null;
+  briefProgressState.total = 0;
+  briefProgressState.current = 0;
+}
+
+function renderBriefProgress(label = 'Working...') {
+  if (!status) return;
+  status.innerHTML = '';
+  const spinner = document.createElement('span');
+  spinner.className = 'spinner';
+  status.appendChild(spinner);
+  const text = document.createElement('span');
+  text.style.marginLeft = '8px';
+  const total = briefProgressState.total || '?';
+  const current = typeof briefProgressState.current === 'number' ? briefProgressState.current : 0;
+  text.textContent = `${label} (${current}/${total})`;
+  status.appendChild(text);
+  status.style.color = '';
+}
+
+function startBriefProgress(runId, initialLabel = 'Starting...', initialTotal = 2) {
+  briefProgressState.runId = runId;
+  briefProgressState.total = initialTotal;
+  briefProgressState.current = 0;
+  renderBriefProgress(initialLabel);
+}
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (!message || message.action !== 'briefProgress') return;
+  if (!briefProgressState.runId || message.runId !== briefProgressState.runId) return;
+
+  const nextTotal = Number(message.total);
+  if (Number.isFinite(nextTotal) && nextTotal > 0) {
+    briefProgressState.total = nextTotal;
+  }
+
+  const nextCurrent = Number(message.current);
+  if (Number.isFinite(nextCurrent)) {
+    const total = briefProgressState.total || nextCurrent;
+    briefProgressState.current = Math.min(nextCurrent, total);
+  }
+
+  renderBriefProgress(typeof message.label === 'string' && message.label ? message.label : 'Working...');
+});
 
 function buildTargetsCopyText(companies = []) {
   return companies
@@ -2109,24 +2156,26 @@ generateBtn?.addEventListener('click', async () => {
     status.style.color = '#b91c1c';
     return;
   }
-  status.innerText = 'Generating...';
-  status.style.color = '';
+  const runId = String(Date.now());
+  startBriefProgress(runId, 'Loading docs...');
   resultDiv.style.display = 'none';
   currentHistoryId = null;
 
   chrome.runtime.sendMessage({ action: 'getDocsForProduct', product }, (resp) => {
     const docErr = chrome.runtime.lastError;
     if (docErr) {
+      resetBriefProgress();
       status.innerText = 'Failed to load docs: ' + docErr.message;
       status.style.color = '#b91c1c';
       return;
     }
     const docs = resp && Array.isArray(resp.docs) ? resp.docs : [];
-    chrome.runtime.sendMessage({ action: 'generateBrief', company, location, product, docs }, (result) => {
+    startBriefProgress(runId, 'Generating brief...');
+    chrome.runtime.sendMessage({ action: 'generateBrief', company, location, product, docs, runId }, (result) => {
       const genErr = chrome.runtime.lastError;
-      if (genErr) { status.innerText = 'Error: ' + genErr.message; status.style.color = '#b91c1c'; return; }
-      if (!result) { status.innerText = 'Generation failed'; status.style.color = '#b91c1c'; return; }
-      if (result.error) { status.innerText = 'Error: ' + result.error; status.style.color = '#b91c1c'; return; }
+      if (genErr) { resetBriefProgress(); status.innerText = 'Error: ' + genErr.message; status.style.color = '#b91c1c'; return; }
+      if (!result) { resetBriefProgress(); status.innerText = 'Generation failed'; status.style.color = '#b91c1c'; return; }
+      if (result.error) { resetBriefProgress(); status.innerText = 'Error: ' + result.error; status.style.color = '#b91c1c'; return; }
       renderResultView(result);
       const teleError = typeof result.telephonicPitchError === 'string' ? result.telephonicPitchError.trim() : '';
       if (teleError) {
@@ -2136,6 +2185,7 @@ generateBtn?.addEventListener('click', async () => {
         status.innerText = 'Done.';
         status.style.color = '';
       }
+      resetBriefProgress();
       loadHistory({ selectLatest: true, autoShow: false, updateForm: false, statusText: '' });
     });
   });
